@@ -1,0 +1,82 @@
+{
+  "appnews": {
+    "appid": 367520,
+    "newsitems": [
+      {
+        "gid": "1828441623103525",
+        "title": "Patch Version 1.5.12620 Now Live",
+        "url": "https://steamstore-a.akamaihd.net/news/externalpost/steam_community_announcements/1828441623103525",
+        "is_external_url": true,
+        "author": "jack",
+        "contents": "Patch NotesAdded Traditional Chinese translationFixed low audio volume when navigating the inventory.Fixed alignment for text to not overlap when a wide square key (shift/space/etc) is bound to an action.Fixed overcharmed notches being unintentionally removed in a specific instance.Fixed Radiance's orb attack hitbox lingering slightly longer than intended if the orb expires in the air.Fixed Mawlurks being pushable by Infected Balloons.Fixed Mantis Traitors being damagable while underground.Fixed Journal notification icons sometimes not appearing, and occasionally displaying the incorrect icon.Fixed various instances of the 'New Journal Entry' pop-up not displaying.Fixed minor instances of Hunter's note kills not being awarded as intended.Fixed an instance of Baldur Shell sometimes lingering longer than intended.Fixed double damage to play the correct audio clip (Previously playing single damage sfx).Fixed Heavy Fool's dash attack sometimes not travelling its full distance.Various performance improvements.Various small fixes.",
+        "feedlabel": "Community Announcements",
+        "date": 1774585536,
+        "feedname": "steam_community_announcements",
+        "feed_type": 1,
+        "appid": 367520,
+        "tags": [
+          "patchnotes",
+          "mod_reviewed",
+          "ModAct_1751692459_1774586160_0",
+          "mod_require_rereview"
+        ]
+      },
+      {
+        "gid": "1823825466504062",
+        "title": "Just in time for Hollow Knight's 9th birthday, Team Cherry rolled out its first update in years, including better support for ultrawide monitors and the Steam Deck screen",
+        "url": "https://steamstore-a.akamaihd.net/news/externalpost/PC Gamer/1823825466504062",
+        "is_external_url": true,
+        "author": "Ted Litchfield",
+        "contents": "s reported by <a href=\"https://www.gamingonlinux.com/2026/02/hollow-knight-gets-a-patch-adding-21-9-16-10-resolution-support-and-more/\">GamingOnLinux</a>, Team Cherry delivered its <a href=\"https://store.steampowered.com/news/app/367520/view/526493182068785899\">promised ultrawide update</a> to the original Hollow Knight on February 5. The patch is Hollow Knight's first since 2022, and also comes just a few weeks before the ninth anniversary of its launch on February 24. Here are the brief patch notes:.. <a href=\"https://www.pcgamer.com/games/action/just-in-time-for-hollow-knights-9th-birthday-team-cherry-rolled-out-its-first-update-in-years-including-better-support-for-ultrawide-monitors-and-the-steam-deck-screen/?utm_source=steam&utm_medium=referral\" target=\"_blank\">Read more.</a>",
+        "feedlabel": "PC Gamer",
+        "date": 1770586182,
+        "feedname": "PC Gamer",
+        "feed_type": 0,
+        "appid": 367520
+      },
+      {
+        "gid": "1823825466499225",
+        "title": "Hollow Knight gets a patch adding 21:9 & 16:10 resolution support and more",
+        "url": "https://steamstore-a.akamaihd.net/news/externalpost/GamingOnLinux/1823825466499225",
+        "is_external_url": true,
+        "author": "",
+        "contents": "Team Cherry have given the original Hollow Knight a fresh coat of paint with a new patch out now to improve various parts of the classic metroidvania. Read the full article here: https://www.gamingonlinux.com/2026/02/hollow-knight-gets-a-patch-adding-21-9-16-10-resolution-support-and-more/ ",
+        "feedlabel": "GamingOnLinux",
+        "date": 1770375063,
+        "feedname": "GamingOnLinux",
+        "feed_type": 0,
+        "appid": 367520
+      },
+      {
+        "gid": "1823825466498013",
+        "title": "Patch Version 1.5.12459 Now Live",
+        "url": "https://steamstore-a.akamaihd.net/news/externalpost/steam_community_announcements/1823825466498013",
+        "is_external_url": true,
+        "author": "jack",
+        "contents": "Patch NotesAdded support for 21:9 & 16:10 resolutions.Game now pauses while in inventory menus.Upgraded to Unity Input System for broader controller support (original input system is still available, if preferred, via Options>Controller>Advanced Settings)Added dithering effect, and dithering options, to reduce colour banding.Fixed a softlock in City of Tears Grub room.Reduced Grey Prince Zote's stagger bounce height.Updated Sly's Great Slash collider to closer match visual.Salubra's Blessing now deactivates after reaching max Soul.Map panning is now smoother.Various performance improvements.Various smaller fixes and tweaks.",
+        "feedlabel": "Community Announcements",
+        "date": 1770334105,
+        "feedname": "steam_community_announcements",
+        "feed_type": 1,
+        "appid": 367520,
+        "tags": [
+          "patchnotes"
+        ]
+      },
+      {
+        "gid": "1818752592135357",
+        "title": "Hollow Knight: Silksong to get a free expansion, Hollow Knight getting a refresh upgrade",
+        "url": "https://steamstore-a.akamaihd.net/news/externalpost/GamingOnLinux/1818752592135357",
+        "is_external_url": true,
+        "author": "",
+        "contents": "Team Cherry just revealed some huge news for both Hollow Knight: Silksong and the original Hollow Knight with some free extras on the way. Read the full article here: https://www.gamingonlinux.com/2025/12/hollow-knight-silksong-to-get-a-free-expansion-hollow-knight-getting-a-refresh-upgrade/ ",
+        "feedlabel": "GamingOnLinux",
+        "date": 1765881575,
+        "feedname": "GamingOnLinux",
+        "feed_type": 0,
+        "appid": 367520
+      }
+    ],
+    "count": 131
+  }
+}

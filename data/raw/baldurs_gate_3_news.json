@@ -1,0 +1,76 @@
+{
+  "appnews": {
+    "appid": 1086940,
+    "newsitems": [
+      {
+        "gid": "1830797770237247",
+        "title": "The best possible fantasy author is writing a dark, tragic prequel novel for our beloved Baldur's Gate 3 boy Astarion",
+        "url": "https://steamstore-a.akamaihd.net/news/externalpost/PC Gamer/1830797770237247",
+        "is_external_url": true,
+        "author": "Lauren Morton",
+        "contents": "You say \"Astarion backstory\" and I'll show you a very long list of fanfics, but for anyone who's already exhausted that catalog: today's a big day. There's going to be an official prequel novel for your sad, sexy Baldur's Gate 3 boyfriend this September. Oh and yes, Neil Newbon's recording the audiobook version, obviously... <a href=\"https://www.pcgamer.com/games/baldurs-gate/the-best-possible-fantasy-author-is-writing-a-dark-tragic-prequel-novel-for-our-beloved-baldurs-gate-3-boy-astarion/?utm_source=steam&utm_medium=referral\" target=\"_blank\">Read more.</a>",
+        "feedlabel": "PC Gamer",
+        "date": 1777059694,
+        "feedname": "PC Gamer",
+        "feed_type": 0,
+        "appid": 1086940
+      },
+      {
+        "gid": "1828441623106717",
+        "title": "Baldur's Gate 3 YouTuber discovers 'time travel' glitch that also reveals 4 nude Gales hanging out in your camp for some reason",
+        "url": "https://steamstore-a.akamaihd.net/news/externalpost/PC Gamer/1828441623106717",
+        "is_external_url": true,
+        "author": "Rick Lane",
+        "contents": "Two and half years since<a href=\"https://www.pcgamer.com/uk/baldur-s-gate-3/\"> Baldur's Gate 3</a> released, and players are still finding new ways to bend & break Larian's preposterously flexible RPG. Indeed, far from running out of bizarre exploits to discover, the glitches and hacks are if anything becoming weird and more impressive... <a href=\"https://www.pcgamer.com/games/baldurs-gate/baldurs-gate-3-youtuber-discovers-time-travel-glitch-that-also-reveals-4-nude-gales-hanging-out-in-your-camp-for-some-reason/?utm_source=steam&utm_medium=referral\" target=\"_blank\">Read more.</a>",
+        "feedlabel": "PC Gamer",
+        "date": 1774710000,
+        "feedname": "PC Gamer",
+        "feed_type": 0,
+        "appid": 1086940
+      },
+      {
+        "gid": "1828441623104871",
+        "title": "Astarion's actor from Baldur's Gate 3 has dodged similar roles: 'Repetition breeds stagnation'",
+        "url": "https://steamstore-a.akamaihd.net/news/externalpost/PC Gamer/1828441623104871",
+        "is_external_url": true,
+        "author": "Harvey Randall",
+        "contents": "starion from <a href=\"https://www.pcgamer.com/baldur-s-gate-3/\">Baldur's Gate 3</a> is certainly up there in the hall of fame of killer RPG companions—not just because he's literally a killer as a vampire, but because he's a nuanced, complicated character performed by a very talented actor. It's no shock that Neil Newbon, who played him in Larian's finest, <a href=\"https://www.pcgamer.com/im-an-actor-im-not-a-doctorim-not-a-hero-astarions-voice-actor-reflects-on-his-game-awards-win-for-baldurs-gate-3-and-the-humility-of-helping-others-feel-seen/\">received awards for his work</a>... <a href=\"https://www.pcgamer.com/games/baldurs-gate/astarions-actor-from-baldurs-gate-3-has-dodged-similar-roles-repetition-breeds-stagnation/?utm_source=steam&utm_medium=referral\" target=\"_blank\">Read more.</a>",
+        "feedlabel": "PC Gamer",
+        "date": 1774625431,
+        "feedname": "PC Gamer",
+        "feed_type": 0,
+        "appid": 1086940
+      },
+      {
+        "gid": "1827626365771350",
+        "title": "Baldur's Gate 3 gets a new hotfix to fix the old hotfix that fixed corrupted saves but started causing crashes",
+        "url": "https://steamstore-a.akamaihd.net/news/externalpost/PC Gamer/1827626365771350",
+        "is_external_url": true,
+        "author": "Andy Chalk",
+        "contents": "Back in February, Larian rolled out a small update for <a href=\"https://www.pcgamer.com/baldur-s-gate-3/\">Baldur's Gate 3</a> that aimed to fix a few crashes, technical issues, and in particular, <a href=\"https://www.pcgamer.com/games/baldurs-gate/surprise-baldurs-gate-3-got-a-fresh-patch-unsurprise-its-vanishingly-small-but-at-least-it-repairs-some-corrupted-saves/\">corrupted saves</a>. And it worked! Except, well, it apparently also broke a few things along the way. So you know what that means: A new hotfix to fix the old hotfix... <a href=\"https://www.pcgamer.com/games/baldurs-gate/baldurs-gate-3-gets-a-new-hotfix-to-fix-the-old-hotfix-that-fixed-corrupted-saves-but-started-causing-crashes/?utm_source=steam&utm_medium=referral\" target=\"_blank\">Read more.</a>",
+        "feedlabel": "PC Gamer",
+        "date": 1774547163,
+        "feedname": "PC Gamer",
+        "feed_type": 0,
+        "appid": 1086940
+      },
+      {
+        "gid": "1827626365770693",
+        "title": "Hotfix #36 Now Live!",
+        "url": "https://steamstore-a.akamaihd.net/news/externalpost/steam_community_announcements/1827626365770693",
+        "is_external_url": true,
+        "author": "SaloAtLarian",
+        "contents": "Hey folks, Our last small update, which aimed to resolve corrupted savegames affecting a number of players, seemed to have also introduced some performance issues that triggered crashes. Thank you for your patience while these were investigated! A fix is now rolling out for all platforms that addresses these performance issues and some other crashes and blockers that were still affecting players. FIXESFixed a framerate drop and eventual crash when loading a savegame.Fixed several crashes.Fixed a bug on Xbox where tooltips in the Inventory and Trade windows wouldn't display correctly.Fixed a bug on Mac preventing you from progressing past Character Creation after starting a character introduction cinematic on Honour Mode.",
+        "feedlabel": "Community Announcements",
+        "date": 1774536005,
+        "feedname": "steam_community_announcements",
+        "feed_type": 1,
+        "appid": 1086940,
+        "tags": [
+          "patchnotes"
+        ]
+      }
+    ],
+    "count": 1856
+  }
+}

@@ -1,0 +1,81 @@
+[tool.poetry]
+name = "rag-agent"
+version = "0.1.0"
+description = "RAG agent project"
+authors = ["seo"]
+
+
+[tool.poetry.dependencies]
+python = "^3.11"
+
+# 언어 및 자연어 처리 관련 패키지
+langchain = "0.*"
+langchain-core = "0.*"
+langchain-experimental = "0.*"
+langchain-community = "0.*"
+langchain-openai = "0.*"
+langchain-anthropic = "0.*"
+langchain-text-splitters = "0.*"
+langchain-elasticsearch = "0.*"
+langchain-chroma = "0.*"
+langchain-cohere = "0.*"
+langchain-milvus = "0.*"
+langchain-google-genai = "2.*"
+langchain-huggingface = "0.*"
+langchain-azure-ai = "0.*"
+langchainhub = "0.*"
+langgraph = "0.*"
+langsmith = "0.*"
+huggingface-hub = "0.*"
+openai = "1.*"
+deepl = "1.*"
+kiwipiepy = "0.*"
+konlpy = "0.*"
+
+# 데이터 처리 및 분석 관련 패키지
+pandas = "2.*"
+
+# 사용자 인터페이스 관련 패키지
+streamlit = "1.*"
+jupyter = "1.*"
+notebook = "7.*"
+
+# 딥러닝 및 머신러닝 관련 패키지
+faiss-cpu = "1.*"
+
+# 기타 유틸리티 및 필수 패키지
+python-dotenv = "1.*"
+pydantic = "2.*"
+lxml = "5.*"
+pillow = "10.*"
+lark = "1.*"
+ragas = "0.*"
+unstructured = {version = "0.*", extras = ["all-docs"]}
+arxiv = "2.*"
+tiktoken = "0.*"
+tenacity = "8.*"
+pymilvus = "2.*"
+google-search-results = "2.*"
+protobuf = "3.*"
+sqlalchemy = "2.*"
+llama-index-core = "0.*"
+llama-parse = "0.*"
+llama-index-readers-file = "0.*"
+flashrank = "0.*"
+docx2txt = "0.*"
+nest-asyncio = "1.*"
+rapidocr-onnxruntime = "1.*"
+seaborn = "0.*"
+grandalf = "0.*"
+rouge-score = "0.*"
+mypy = "1.*"
+pinecone = "5.*"
+wikipedia = "1.*"
+scikit-learn = "1.*"
+
+[tool.poetry.group.dev.dependencies]
+ipykernel = "^6.29.5"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
