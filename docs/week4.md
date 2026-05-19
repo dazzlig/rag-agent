@@ -134,7 +134,6 @@ Markdown 문서는 섹션 구조가 명확하므로, 헤더 기반 splitter가 �
 - Answer Relevancy
 - Context Precision
 
-Context Recall은 정답 context 라벨링이 필요하기 때문에 이번 baseline 단계에서는 제외했다.
 
 ---
 
