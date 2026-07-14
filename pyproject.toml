@@ -3,6 +3,12 @@ name = "rag-agent"
 version = "0.1.0"
 description = "RAG agent project"
 authors = ["seo"]
+packages = [{ include = "steam_rag", from = "src" }]
+
+[tool.poetry.scripts]
+steam-rag = "steam_rag.cli:main"
+steam-rag-web = "steam_rag.ui.gradio_app:main"
+steam-rag-service = "steam_rag.api.service_app:main"
 
 
 [tool.poetry.dependencies]
@@ -27,6 +33,7 @@ langchainhub = "0.*"
 langgraph = "0.*"
 langsmith = "0.*"
 huggingface-hub = "0.*"
+sentence-transformers = "3.*"
 openai = "1.*"
 deepl = "1.*"
 kiwipiepy = "0.*"
@@ -37,6 +44,7 @@ pandas = "2.*"
 
 # 사용자 인터페이스 관련 패키지
 streamlit = "1.*"
+gradio = "5.*"
 jupyter = "1.*"
 notebook = "7.*"
 

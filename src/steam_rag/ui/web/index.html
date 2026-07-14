@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Steam 데이터와 멀티 에이전트 RAG를 활용한 게임 추천·분석 서비스">
+  <title>SteamLens AI</title>
+  <link rel="stylesheet" href="/assets/app.css?v=35">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="SteamLens 홈">
+      <span class="brand-mark" aria-hidden="true">S</span>
+      <span>SteamLens</span><b>AI</b>
+    </a>
+    <div class="live-badge"><i></i> Steam 데이터 연동</div>
+  </header>
+
+  <div class="page-shell">
+    <aside class="side-nav">
+      <button id="newConversation" class="new-conversation" type="button"><span>＋</span> 새 대화</button>
+      <div class="side-title history-title">대화 목록</div>
+      <div id="history" class="history"></div>
+
+      <div class="system-card">
+        <div class="system-icon">◎</div>
+        <div><b id="systemStatus">시스템 확인 중</b><small id="systemDetail">인덱스 상태를 불러옵니다</small></div>
+      </div>
+    </aside>
+
+    <main>
+      <section class="hero" id="hero">
+        <div class="eyebrow" id="heroEyebrow">STEAM GAME INTELLIGENCE</div>
+        <h1 id="heroTitle">어떤 게임을 찾고 있나요?</h1>
+        <p id="heroDescription">취향부터 최신 평가, 할인, 업데이트까지 여러 Agent가 근거를 확인해 답합니다.</p>
+      </section>
+
+      <section id="landing" class="chat-empty-state">
+        
+        <h2>Steam 게임에 대해 무엇이든 물어보세요</h2>
+        <p>게임 추천, 플레이 방식, 최근 평가와 업데이트 변화를 근거와 함께 확인합니다.</p>
+      </section>
+
+      <section id="loading" class="loading-panel hidden" aria-live="polite">
+        <div class="loader-ring"></div>
+        <h2>Agent가 게임 정보를 조사하고 있어요</h2>
+        <p id="loadingText">질문 의도와 게임 이름을 파악하는 중...</p>
+        <div class="loading-track"><span></span></div>
+      </section>
+
+      <section id="result" class="result-layout hidden" aria-live="polite">
+        <div class="result-main">
+          <div class="result-head">
+            <div><span id="resultMode" class="mini-label">AI ANALYSIS</span><h2>대화</h2></div>
+            <button id="copyAnswer" class="ghost-button">답변 복사</button>
+          </div>
+          <div id="conversationMessages" class="conversation-messages"></div>
+          <article id="answer" class="answer-content hidden"></article>
+          <div id="gameSection" class="content-section hidden">
+            <div class="section-heading"><h3>확인된 게임</h3><span id="gameCount"></span></div>
+            <div id="games" class="game-grid"></div>
+          </div>
+          <div id="sourceSection" class="content-section hidden">
+            <div class="section-heading"><h3>사용한 근거</h3><span id="sourceCount"></span></div>
+            <div id="sources" class="source-list"></div>
+          </div>
+        </div>
+        <aside class="trace-panel">
+          <div class="trace-head"><div><i></i><span>조사 과정</span></div><small>LangGraph</small></div>
+          <div id="queryVariants" class="variant-box hidden"></div>
+          <div id="agentTrace" class="agent-trace"></div>
+          <div id="coverage" class="coverage-card hidden">
+            <div><span>근거 충족도</span><b id="coverageValue">0%</b></div>
+            <div class="coverage-track"><span id="coverageBar"></span></div>
+          </div>
+        </aside>
+      </section>
+
+      <section id="error" class="error-panel hidden" role="alert">
+        <span>!</span><div><h2>요청을 처리하지 못했습니다</h2><p id="errorMessage"></p></div>
+      </section>
+
+      <div class="composer-shell">
+        <form id="searchForm" class="search-box">
+          <textarea id="question" rows="1" maxlength="1200" placeholder="메시지를 입력하세요" aria-label="게임 질문"></textarea>
+          <span class="shortcut">Ctrl K</span>
+          <button id="submitButton" type="submit" aria-label="메시지 보내기"><span>↑</span></button>
+        </form>
+      </div>
+    </main>
+  </div>
+
+  <footer><span>SteamLens AI Prototype</span><span>Steam 정보는 수집 시점 기준이며, 중요한 내용은 공식 스토어에서 다시 확인하세요.</span></footer>
+  <script src="/assets/app.js?v=35" defer></script>
+</body>
+</html>

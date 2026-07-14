@@ -1,6 +1,6 @@
 """Reusable Steam game RAG pipeline."""
 
-from .models import Document, RAGAnswer, SearchResult
-from .pipeline import RAGPipeline
+from .application.rag_pipeline import RAGPipeline
+from .common.models import Document, RAGAnswer, SearchResult
 
 __all__ = ["Document", "RAGAnswer", "RAGPipeline", "SearchResult"]

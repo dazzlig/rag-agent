@@ -1,0 +1,1 @@
+"""External API adapter tests."""
