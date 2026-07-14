@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import subprocess
 import sys
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from steam_rag.application.rag_pipeline import RAGPipeline
@@ -48,6 +50,25 @@ DEFAULT_STAGE4_SUMMARY = Path("data/eval/stage4_benchmark_summary.csv")
 DEFAULT_CONVERSATION_GOLDEN = Path("data/eval/conversation_golden_set_v1.jsonl")
 DEFAULT_CONVERSATION_DETAILS = Path("data/eval/conversation_benchmark_details.jsonl")
 DEFAULT_CONVERSATION_SUMMARY = Path("data/eval/conversation_benchmark_summary.json")
+DEFAULT_CONVERSATION_MANIFEST = Path("data/eval/conversation_benchmark_manifest.json")
+
+
+def _file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _git_revision() -> str:
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return completed.stdout.strip()
 
 
 def _add_corpus_arguments(command: argparse.ArgumentParser) -> None:
@@ -190,6 +211,9 @@ def _parser() -> argparse.ArgumentParser:
     evaluate_conversations.add_argument(
         "--summary-output", type=Path, default=DEFAULT_CONVERSATION_SUMMARY
     )
+    evaluate_conversations.add_argument(
+        "--manifest-output", type=Path, default=DEFAULT_CONVERSATION_MANIFEST
+    )
     evaluate_conversations.add_argument("--docs", type=Path, default=DEFAULT_DOCS)
     evaluate_conversations.add_argument("--index", type=Path, default=DEFAULT_INDEX)
     evaluate_conversations.add_argument("--raw", type=Path, default=DEFAULT_RAW)
@@ -201,6 +225,14 @@ def _parser() -> argparse.ArgumentParser:
     evaluate_conversations.add_argument("--answer-model", default="gpt-5-mini")
     evaluate_conversations.add_argument("--top-k", type=int, default=6)
     evaluate_conversations.add_argument("--limit", type=int, default=0)
+    evaluate_conversations.add_argument("--run-id", default="")
+    evaluate_conversations.add_argument("--run-label", default="")
+    evaluate_conversations.add_argument(
+        "--cache-state",
+        choices=("unknown", "cold", "warm", "mixed"),
+        default="unknown",
+        help="Operator label only; caches are never deleted automatically",
+    )
     evaluate_conversations.add_argument(
         "--validate-only",
         action="store_true",
@@ -533,6 +565,8 @@ def main(argv: list[str] | None = None) -> int:
         # Imported only for an explicit live evaluation. Validation and unit tests stay offline.
         from steam_rag.application.service_runtime import ServicePaths, SteamServiceRuntime
 
+        started_at = datetime.now(timezone.utc)
+        run_id = args.run_id.strip() or started_at.strftime("conversation-%Y%m%dT%H%M%SZ")
         cases = load_conversation_golden_set(args.golden_set)
         if args.limit > 0:
             cases = cases[: args.limit]
@@ -550,10 +584,48 @@ def main(argv: list[str] | None = None) -> int:
             answer_model=args.answer_model,
         )
         records = ServiceConversationBenchmarkRunner(runtime, top_k=args.top_k).run(cases)
+        finished_at = datetime.now(timezone.utc)
+        run_metadata = {
+            "run_id": run_id,
+            "run_label": args.run_label.strip(),
+            "started_at_utc": started_at.isoformat(),
+            "finished_at_utc": finished_at.isoformat(),
+            "duration_seconds": round((finished_at - started_at).total_seconds(), 3),
+            "git_commit": _git_revision(),
+            "golden_set": str(args.golden_set),
+            "golden_set_sha256": _file_sha256(args.golden_set),
+            "cache_state": args.cache_state,
+            "case_count": len(cases),
+            "turn_count": len(records),
+            "top_k": args.top_k,
+            "embedding_model": args.embedding_model,
+            "answer_model": args.answer_model,
+            "reranker_enabled": os.getenv("STEAM_RAG_ENABLE_RERANKER", "1"),
+            "reranker_model": os.getenv(
+                "STEAM_RAG_RERANKER_MODEL", DEFAULT_RERANKER_MODEL
+            ),
+            "python_version": sys.version.split()[0],
+        }
         summary = save_conversation_benchmark(
             records,
             details_path=args.details_output,
             summary_path=args.summary_output,
+            run_metadata=run_metadata,
+        )
+        manifest = {
+            "run": run_metadata,
+            "outputs": {
+                "details": str(args.details_output),
+                "summary": str(args.summary_output),
+                "manifest": str(args.manifest_output),
+            },
+            "latency_ms": summary.get("latency_ms", {}),
+            "operations": summary.get("operations", {}),
+        }
+        args.manifest_output.parent.mkdir(parents=True, exist_ok=True)
+        args.manifest_output.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
         )
         print(
             json.dumps(
@@ -563,6 +635,7 @@ def main(argv: list[str] | None = None) -> int:
                     "turn_count": len(records),
                     "details_output": str(args.details_output),
                     "summary_output": str(args.summary_output),
+                    "manifest_output": str(args.manifest_output),
                     "summary": summary,
                 },
                 ensure_ascii=False,

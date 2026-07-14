@@ -12,6 +12,7 @@ from typing import Any, Protocol, Sequence
 from steam_rag.agents.agentic_rag import AgenticRAGConfig, AgenticRAGCoordinator
 from steam_rag.common.interfaces import AnswerGenerator, Embedder
 from steam_rag.common.models import SearchResult
+from steam_rag.common.telemetry import telemetry_session
 from steam_rag.rag_search.hybrid_retriever import HybridTimeAwareRetriever, _cosine, augment_query
 from steam_rag.rag_search.reranker import Reranker
 from steam_rag.rag_search.search_spec import SearchSpec, evaluate_evidence_coverage
@@ -187,6 +188,7 @@ class ConversationTurnRecord:
     latency_ms: float
     error: str
     metrics: dict[str, float | None]
+    telemetry: dict[str, Any] = field(default_factory=dict)
     payload: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -205,6 +207,7 @@ class ConversationTurnRecord:
             "latency_ms": self.latency_ms,
             "error": self.error,
             "metrics": self.metrics,
+            "telemetry": self.telemetry,
             "payload": self.payload,
         }
 
@@ -312,18 +315,20 @@ class ServiceConversationBenchmarkRunner:
                 started = time.perf_counter()
                 payload: dict[str, Any] = {}
                 error = ""
-                try:
-                    raw_payload = self.runtime.ask(
-                        turn.question,
-                        top_k=self.top_k,
-                        history=list(history[-self.history_limit :]),
-                        context_games=list(context_games),
-                    )
-                    if not isinstance(raw_payload, dict):
-                        raise TypeError("runtime.ask() must return a dict payload")
-                    payload = raw_payload
-                except Exception as exc:  # Each failed turn remains observable in the report.
-                    error = f"{type(exc).__name__}: {exc}"
+                with telemetry_session() as telemetry_collector:
+                    try:
+                        raw_payload = self.runtime.ask(
+                            turn.question,
+                            top_k=self.top_k,
+                            history=list(history[-self.history_limit :]),
+                            context_games=list(context_games),
+                        )
+                        if not isinstance(raw_payload, dict):
+                            raise TypeError("runtime.ask() must return a dict payload")
+                        payload = raw_payload
+                    except Exception as exc:  # Each failed turn remains observable in the report.
+                        error = f"{type(exc).__name__}: {exc}"
+                    turn_telemetry = telemetry_collector.snapshot()
                 latency_ms = (time.perf_counter() - started) * 1000
                 answer = str(payload.get("answer") or "").strip()
                 observed_appids = sorted(_payload_appids(payload))
@@ -344,6 +349,7 @@ class ServiceConversationBenchmarkRunner:
                         latency_ms=round(latency_ms, 3),
                         error=error,
                         metrics=metrics,
+                        telemetry=turn_telemetry,
                         payload=payload,
                     )
                 )
@@ -403,6 +409,124 @@ def score_conversation_turn(
     }
 
 
+def _aggregate_operational_metrics(
+    records: Sequence[ConversationTurnRecord],
+) -> dict[str, Any]:
+    openai_keys = (
+        "call_count",
+        "chat_call_count",
+        "embedding_call_count",
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "cached_input_tokens",
+        "estimated_cost_usd",
+        "unknown_cost_call_count",
+        "error_count",
+        "latency_ms",
+    )
+    tavily_keys = (
+        "request_count",
+        "external_call_count",
+        "cache_hit_count",
+        "cache_miss_count",
+        "credits",
+        "estimated_cost_usd",
+        "error_count",
+    )
+    steam_keys = (
+        "request_count",
+        "attempt_count",
+        "success_count",
+        "error_count",
+        "latency_ms",
+    )
+    corpus_keys = ("check_count", "collected_count", "reused_count", "indexed_count")
+    openai: dict[str, Any] = {key: 0 for key in openai_keys}
+    tavily: dict[str, Any] = {key: 0 for key in tavily_keys}
+    steam: dict[str, Any] = {key: 0 for key in steam_keys}
+    corpus: dict[str, Any] = {key: 0 for key in corpus_keys}
+    models: dict[str, dict[str, Any]] = {}
+    endpoints: dict[str, dict[str, int]] = {}
+    external_call_count = 0
+    estimated_cost_usd = 0.0
+    turns_with_telemetry = 0
+
+    for record in records:
+        telemetry = record.telemetry if isinstance(record.telemetry, dict) else {}
+        if telemetry:
+            turns_with_telemetry += 1
+        external_call_count += int(telemetry.get("external_call_count") or 0)
+        estimated_cost_usd += float(telemetry.get("estimated_cost_usd") or 0.0)
+        source_openai = telemetry.get("openai") if isinstance(telemetry.get("openai"), dict) else {}
+        source_tavily = telemetry.get("tavily") if isinstance(telemetry.get("tavily"), dict) else {}
+        source_steam = telemetry.get("steam") if isinstance(telemetry.get("steam"), dict) else {}
+        source_corpus = telemetry.get("corpus") if isinstance(telemetry.get("corpus"), dict) else {}
+        for key in openai_keys:
+            openai[key] += source_openai.get(key) or 0
+        for key in tavily_keys:
+            tavily[key] += source_tavily.get(key) or 0
+        for key in steam_keys:
+            steam[key] += source_steam.get(key) or 0
+        for key in corpus_keys:
+            corpus[key] += source_corpus.get(key) or 0
+
+        source_models = source_openai.get("models")
+        if isinstance(source_models, dict):
+            for model, source_row in source_models.items():
+                if not isinstance(source_row, dict):
+                    continue
+                target = models.setdefault(str(model), {key: 0 for key in openai_keys})
+                for key in openai_keys:
+                    target[key] += source_row.get(key) or 0
+        source_endpoints = source_steam.get("endpoints")
+        if isinstance(source_endpoints, dict):
+            for endpoint, source_row in source_endpoints.items():
+                if not isinstance(source_row, dict):
+                    continue
+                target = endpoints.setdefault(
+                    str(endpoint),
+                    {
+                        "request_count": 0,
+                        "attempt_count": 0,
+                        "success_count": 0,
+                        "error_count": 0,
+                    },
+                )
+                for key in target:
+                    target[key] += int(source_row.get(key) or 0)
+
+    for row in [openai, *models.values()]:
+        row["estimated_cost_usd"] = round(float(row["estimated_cost_usd"]), 8)
+        row["latency_ms"] = round(float(row["latency_ms"]), 3)
+    openai["models"] = dict(sorted(models.items()))
+    tavily["credits"] = round(float(tavily["credits"]), 4)
+    tavily["estimated_cost_usd"] = round(float(tavily["estimated_cost_usd"]), 8)
+    tavily["cache_hit_rate"] = (
+        round(tavily["cache_hit_count"] / tavily["request_count"], 6)
+        if tavily["request_count"]
+        else None
+    )
+    steam["latency_ms"] = round(float(steam["latency_ms"]), 3)
+    steam["endpoints"] = dict(sorted(endpoints.items()))
+    turn_count = len(records)
+    return {
+        "turns_with_telemetry": turns_with_telemetry,
+        "external_call_count": external_call_count,
+        "estimated_cost_usd": round(estimated_cost_usd, 8),
+        "mean_estimated_cost_usd_per_turn": (
+            round(estimated_cost_usd / turn_count, 8) if turn_count else None
+        ),
+        "mean_external_calls_per_turn": (
+            round(external_call_count / turn_count, 6) if turn_count else None
+        ),
+        "openai": openai,
+        "tavily": tavily,
+        "steam": steam,
+        "corpus": corpus,
+    }
+
+
 def summarize_conversation_records(
     records: Sequence[ConversationTurnRecord],
 ) -> dict[str, Any]:
@@ -419,12 +543,18 @@ def summarize_conversation_records(
     category_rows: list[dict[str, Any]] = []
     for category in sorted({record.category for record in records}):
         selected = [record for record in records if record.category == category]
+        selected_operations = _aggregate_operational_metrics(selected)
         category_rows.append(
             {
                 "category": category,
                 "turn_count": len(selected),
                 "contract_pass_rate": _mean_metric(selected, "contract_pass"),
                 "error_rate": _mean_metric(selected, "error_rate"),
+                "latency_ms_mean": round(
+                    sum(record.latency_ms for record in selected) / len(selected), 3
+                ),
+                "estimated_cost_usd": selected_operations["estimated_cost_usd"],
+                "external_call_count": selected_operations["external_call_count"],
             }
         )
     return {
@@ -438,6 +568,7 @@ def summarize_conversation_records(
             "p95": _percentile(latencies, 0.95),
             "max": round(max(latencies), 3) if latencies else None,
         },
+        "operations": _aggregate_operational_metrics(records),
         "categories": category_rows,
     }
 
@@ -447,6 +578,7 @@ def save_conversation_benchmark(
     *,
     details_path: Path,
     summary_path: Path,
+    run_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     details_path.parent.mkdir(parents=True, exist_ok=True)
     details_path.write_text(
@@ -454,6 +586,8 @@ def save_conversation_benchmark(
         encoding="utf-8",
     )
     summary = summarize_conversation_records(records)
+    if run_metadata:
+        summary["run"] = dict(run_metadata)
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return summary

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from steam_rag.common.models import SearchResult
+from steam_rag.common.telemetry import tracked_openai_call
 from steam_rag.external_apis.tavily_client import TavilySearchClient, compact_tavily_results
 
 
@@ -44,7 +45,14 @@ class OpenAIEmbedder:
     def embed_documents(self, texts: Sequence[str]) -> list[list[float]]:
         if not texts:
             return []
-        response = self._client.embeddings.create(model=self.model_name, input=list(texts))
+        response = tracked_openai_call(
+            model=self.model_name,
+            operation="embedding",
+            call=lambda: self._client.embeddings.create(
+                model=self.model_name,
+                input=list(texts),
+            ),
+        )
         return [list(item.embedding) for item in sorted(response.data, key=lambda item: item.index)]
 
     def embed_query(self, text: str) -> list[float]:
@@ -58,6 +66,14 @@ class OpenAIAnswerGenerator:
 
     def generate(self, question: str, results: Sequence[SearchResult]) -> str:
         return self._generate_with_context(question, results)
+
+    def _chat_completion(self, **kwargs: Any) -> Any:
+        model = str(kwargs.get("model") or self.model_name)
+        return tracked_openai_call(
+            model=model,
+            operation="chat",
+            call=lambda: self._client.chat.completions.create(**kwargs),
+        )
 
     def rewrite_followup_question(
         self,
@@ -85,7 +101,7 @@ class OpenAIAnswerGenerator:
         candidate_text = "\n".join(
             f"- {item['name']} (appid: {item['appid']})" for item in verified_games
         ) or "- 없음"
-        response = self._client.chat.completions.create(
+        response = self._chat_completion(
             model=self.model_name,
             messages=[
                 {
@@ -135,7 +151,7 @@ class OpenAIAnswerGenerator:
     def ground_reference_game(self, question: str) -> dict[str, Any]:
         """Resolve a nickname/translated seed title without inventing a Steam AppID."""
 
-        response = self._client.chat.completions.create(
+        response = self._chat_completion(
             model=self.model_name,
             response_format={"type": "json_object"},
             messages=[
@@ -240,7 +256,7 @@ class OpenAIAnswerGenerator:
                 f"날짜={source.get('source_date')}; URL={source.get('url')}\n"
                 f"{result.document.page_content[:1800]}"
             )
-        response = self._client.chat.completions.create(
+        response = self._chat_completion(
             model=self.model_name,
             messages=[
                 {
@@ -297,14 +313,14 @@ class OpenAIAnswerGenerator:
                 ),
             },
         ]
-        response = self._client.chat.completions.create(model=self.model_name, messages=messages)
+        response = self._chat_completion(model=self.model_name, messages=messages)
         content = response.choices[0].message.content
         return content.strip() if content else ""
 
     def expand_search_queries(self, question: str) -> list[str]:
         """Create alias/title variants, leaving AppID verification to Steam."""
 
-        response = self._client.chat.completions.create(
+        response = self._chat_completion(
             model=self.model_name,
             response_format={"type": "json_object"},
             messages=[
@@ -368,7 +384,7 @@ class OpenAIAnswerGenerator:
         sources = compact_tavily_results(search, limit=8)
         if not sources:
             return {"concept_summary": "", "candidates": [], "source_urls": []}
-        response = self._client.chat.completions.create(
+        response = self._chat_completion(
             model=self.model_name,
             response_format={"type": "json_object"},
             messages=[
@@ -430,7 +446,7 @@ class OpenAIAnswerGenerator:
         sources = compact_tavily_results(search, limit=6)
         if not sources:
             return []
-        response = self._client.chat.completions.create(
+        response = self._chat_completion(
             model=self.model_name,
             response_format={"type": "json_object"},
             messages=[
@@ -557,7 +573,7 @@ class OpenAIAnswerGenerator:
                 ),
             },
         ]
-        response = self._client.chat.completions.create(model=self.model_name, messages=messages)
+        response = self._chat_completion(model=self.model_name, messages=messages)
         content = response.choices[0].message.content
         return content.strip() if content else "답변을 생성하지 못했습니다."
 

@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 from urllib.request import Request, urlopen
 
+from steam_rag.common.telemetry import current_telemetry
+
 
 class TavilySearchClient:
     """Small Tavily Search client with a local TTL cache and no SDK dependency."""
@@ -69,6 +71,9 @@ class TavilySearchClient:
         cached = self._read_cache(cache_path)
         if cached is not None:
             cached["cache_hit"] = True
+            collector = current_telemetry()
+            if collector is not None:
+                collector.record_tavily(cache_hit=True)
             return cached
 
         request = Request(
@@ -81,13 +86,32 @@ class TavilySearchClient:
             },
             method="POST",
         )
-        with self._opener(request, timeout=self.timeout_seconds) as response:
+        with self._open_search(request) as response:
             result = json.loads(response.read().decode("utf-8"))
         if not isinstance(result, dict):
             raise RuntimeError("Tavily 응답 형식이 올바르지 않습니다.")
         result["cache_hit"] = False
+        usage = result.get("usage") if isinstance(result.get("usage"), dict) else {}
+        try:
+            credits = float(usage.get("credits") or 0.0)
+        except (TypeError, ValueError):
+            credits = 0.0
+        if credits <= 0:
+            credits = 2.0 if search_depth == "advanced" else 1.0
+        collector = current_telemetry()
+        if collector is not None:
+            collector.record_tavily(cache_hit=False, credits=credits)
         self._write_cache(cache_path, result)
         return result
+
+    def _open_search(self, request: Request) -> Any:
+        try:
+            return self._opener(request, timeout=self.timeout_seconds)
+        except Exception:
+            collector = current_telemetry()
+            if collector is not None:
+                collector.record_tavily(cache_hit=False, error=True)
+            raise
 
     def _cache_path(self, payload: dict[str, Any]) -> Path:
         encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")

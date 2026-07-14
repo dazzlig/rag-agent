@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 import _bootstrap  # noqa: F401
 from steam_rag.common.models import Document
+from steam_rag.common.telemetry import telemetry_session
 from steam_rag.rag_search.vector_store import VectorIndex
 from steam_rag.steam_collection.corpus_manager import OnDemandCorpusManager, SteamCatalog, _resolve_via_store_search
 from steam_rag.steam_collection.markdown_documents import parse_markdown
@@ -240,6 +241,31 @@ class SteamCollectionTests(unittest.TestCase):
         self.assertEqual(text_calls[0][1]["l"], "koreana")
         self.assertEqual(text_calls[0][1]["cc"], "KR")
         self.assertEqual(json_calls[1][1]["language"], "koreana")
+
+    def test_steam_transport_attempts_are_recorded_by_endpoint(self) -> None:
+        calls = 0
+
+        def flaky_transport(url: str, params: dict[str, object]) -> dict:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise OSError("temporary")
+            return {"42": {"success": True, "data": {"steam_appid": 42, "name": "Game"}}}
+
+        client = SteamAPIClient(
+            transport=flaky_transport,
+            request_delay_seconds=0,
+            backoff_seconds=0,
+        )
+        with telemetry_session() as telemetry:
+            client.fetch_app_details(42)
+            snapshot = telemetry.snapshot()["steam"]
+
+        self.assertEqual(snapshot["request_count"], 1)
+        self.assertEqual(snapshot["attempt_count"], 2)
+        self.assertEqual(snapshot["success_count"], 1)
+        self.assertEqual(snapshot["error_count"], 1)
+        self.assertIn("api.appdetails", snapshot["endpoints"])
 
     def test_review_date_range_paginates_until_start_date(self) -> None:
         calls: list[str] = []

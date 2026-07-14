@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import _bootstrap  # noqa: F401
+from steam_rag.common.telemetry import current_telemetry
 from steam_rag.evaluation_tools.benchmark import (
     ConversationCase,
     ServiceConversationBenchmarkRunner,
@@ -246,6 +247,35 @@ class ConversationBenchmarkTests(unittest.TestCase):
             self.assertEqual(summary["metric_family"], "deterministic_contract_heuristics")
             self.assertEqual(len((root / "details.jsonl").read_text(encoding="utf-8").splitlines()), 2)
             self.assertIn('"p95"', (root / "summary.json").read_text(encoding="utf-8"))
+
+    def test_operational_metrics_are_captured_per_turn_and_aggregated(self) -> None:
+        class InstrumentedRuntime(FakeConversationRuntime):
+            def ask(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+                telemetry = current_telemetry()
+                assert telemetry is not None
+                telemetry.record_openai(
+                    model="gpt-5-mini",
+                    operation="chat",
+                    response={
+                        "usage": {
+                            "prompt_tokens": 100,
+                            "completion_tokens": 20,
+                            "total_tokens": 120,
+                        }
+                    },
+                )
+                telemetry.record_tavily(cache_hit=False, credits=1)
+                return super().ask(*args, **kwargs)
+
+        records = ServiceConversationBenchmarkRunner(InstrumentedRuntime()).run([_case()])
+        summary = summarize_conversation_records(records)
+
+        self.assertEqual(records[0].telemetry["openai"]["call_count"], 1)
+        self.assertEqual(summary["operations"]["openai"]["call_count"], 2)
+        self.assertEqual(summary["operations"]["tavily"]["external_call_count"], 2)
+        self.assertEqual(summary["operations"]["tavily"]["credits"], 2.0)
+        self.assertGreater(summary["operations"]["estimated_cost_usd"], 0.0)
+        self.assertIn("estimated_cost_usd", summary["categories"][0])
 
     def test_loader_rejects_missing_explicit_forbidden_contract(self) -> None:
         with self.assertRaisesRegex(ValueError, "forbidden contract"):

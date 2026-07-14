@@ -12,6 +12,7 @@ from typing import Any
 
 from steam_rag.agents.multi_agent_workflow import QueryExpansionAgent
 from steam_rag.application.rag_pipeline import RAGPipeline
+from steam_rag.common.telemetry import telemetry_session
 from steam_rag.external_apis.openai_client import OpenAIAnswerGenerator, OpenAIEmbedder, load_env_file
 from steam_rag.game_recommendation.candidate_service import DynamicRecommendationService
 from steam_rag.game_recommendation.profile_builder import collect_recommendation_profile
@@ -92,6 +93,24 @@ class SteamServiceRuntime:
         return self._reranker
 
     def ask(
+        self,
+        question: str,
+        *,
+        top_k: int = 6,
+        history: list[dict[str, str]] | None = None,
+        context_games: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        with telemetry_session() as telemetry:
+            payload = self._ask_impl(
+                question,
+                top_k=top_k,
+                history=history,
+                context_games=context_games,
+            )
+            payload["telemetry"] = telemetry.snapshot()
+            return payload
+
+    def _ask_impl(
         self,
         question: str,
         *,

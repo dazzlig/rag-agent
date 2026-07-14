@@ -26,6 +26,8 @@ data/eval/stage4_*
 !data/eval/stage4_agent_generation_smoke_summary.csv
 data/eval/conversation_benchmark_details.jsonl
 data/eval/conversation_benchmark_summary.json
+data/eval/conversation_benchmark_manifest.json
+data/eval/runs/
 data/eval/week5_*
 data/eval/week6_*
 data/eval/week8_*

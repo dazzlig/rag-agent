@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from steam_rag.common.interfaces import Embedder
+from steam_rag.common.telemetry import current_telemetry
 from steam_rag.rag_search.vector_store import VectorIndex, build_index, upsert_game_documents
 from steam_rag.steam_collection.markdown_documents import chunk_documents, load_documents, parse_markdown, parse_metadata
 from steam_rag.steam_collection.steam_client import CollectionResult, SteamAPIClient, SteamGame, collect_game, save_catalog
@@ -306,7 +307,17 @@ class OnDemandCorpusManager:
                 raise RuntimeError(f"Markdown collection did not produce a file for appid={game.appid}")
 
             indexed = self._ensure_index(markdown_path, game, embedder, force=collected)
-            return CorpusUpdate(game, markdown_path, collected, indexed, reason)
+            update = CorpusUpdate(game, markdown_path, collected, indexed, reason)
+            collector = current_telemetry()
+            if collector is not None:
+                collector.record_corpus_update(
+                    appid=game.appid,
+                    name=game.name,
+                    collected=collected,
+                    indexed=indexed,
+                    reason=reason,
+                )
+            return update
 
     def _find_markdown(self, appid: int) -> Path | None:
         for path in self.docs_dir.glob("*.md"):

@@ -11,6 +11,7 @@ from typing import Any, Iterable, Literal, Sequence
 
 from pydantic import BaseModel, Field
 
+from steam_rag.common.telemetry import tracked_openai_call
 from steam_rag.game_metadata.playstyle import TAG_ALIASES, extract_query_facets, normalize_steam_tags
 
 
@@ -216,9 +217,12 @@ class OpenAIRecommendationQueryStructurer:
 
     def structure(self, question: str) -> RecommendationQuery:
         try:
-            completion = self._client.chat.completions.parse(
+            completion = tracked_openai_call(
                 model=self.model,
-                messages=[
+                operation="chat",
+                call=lambda: self._client.chat.completions.parse(
+                    model=self.model,
+                    messages=[
                     {
                         "role": "system",
                         "content": (
@@ -233,8 +237,9 @@ class OpenAIRecommendationQueryStructurer:
                         ),
                     },
                     {"role": "user", "content": question},
-                ],
-                response_format=RecommendationQuery,
+                    ],
+                    response_format=RecommendationQuery,
+                ),
             )
             parsed = completion.choices[0].message.parsed
             if isinstance(parsed, RecommendationQuery):

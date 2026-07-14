@@ -7,6 +7,7 @@ from pathlib import Path
 
 import _bootstrap  # noqa: F401
 
+from steam_rag.common.telemetry import telemetry_session
 from steam_rag.external_apis.tavily_client import TavilySearchClient, compact_tavily_results
 
 
@@ -56,8 +57,10 @@ class TavilySearchTests(unittest.TestCase):
                 cache_dir=Path(directory),
                 opener=opener,
             )
-            first = client.search("Steam RPG", max_results=5)
-            second = client.search("Steam RPG", max_results=5)
+            with telemetry_session() as telemetry:
+                first = client.search("Steam RPG", max_results=5)
+                second = client.search("Steam RPG", max_results=5)
+                usage = telemetry.snapshot()["tavily"]
 
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0]["authorization"], "Bearer tvly-test")
@@ -66,6 +69,10 @@ class TavilySearchTests(unittest.TestCase):
         self.assertFalse(calls[0]["payload"]["include_raw_content"])
         self.assertFalse(first["cache_hit"])
         self.assertTrue(second["cache_hit"])
+        self.assertEqual(usage["request_count"], 2)
+        self.assertEqual(usage["external_call_count"], 1)
+        self.assertEqual(usage["cache_hit_count"], 1)
+        self.assertEqual(usage["credits"], 1.0)
 
     def test_compaction_filters_low_score_and_unattributed_results(self) -> None:
         rows = compact_tavily_results(

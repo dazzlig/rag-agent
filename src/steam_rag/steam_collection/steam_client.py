@@ -12,6 +12,8 @@ from typing import Callable, Sequence
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
+from steam_rag.common.telemetry import current_telemetry, steam_endpoint_name
+
 from steam_rag.game_metadata.playstyle import build_playstyle_metadata
 
 
@@ -221,15 +223,32 @@ class SteamAPIClient:
     def _get(self, url: str, params: dict[str, object]) -> dict:
         transport = self.transport or self._default_transport
         last_error: Exception | None = None
+        endpoint = steam_endpoint_name(url)
+        collector = current_telemetry()
+        if collector is not None:
+            collector.record_steam_request(endpoint)
         for attempt in range(self.retries):
+            started = time.perf_counter()
             try:
                 payload = transport(url, params)
                 if not isinstance(payload, dict):
                     raise ValueError(f"Steam returned a non-object response for {url}")
+                if collector is not None:
+                    collector.record_steam_attempt(
+                        endpoint,
+                        success=True,
+                        latency_ms=(time.perf_counter() - started) * 1000,
+                    )
                 if self.request_delay_seconds:
                     time.sleep(self.request_delay_seconds)
                 return payload
             except Exception as exc:  # retry network and transient decode failures
+                if collector is not None:
+                    collector.record_steam_attempt(
+                        endpoint,
+                        success=False,
+                        latency_ms=(time.perf_counter() - started) * 1000,
+                    )
                 last_error = exc
                 if attempt + 1 < self.retries:
                     time.sleep(self.backoff_seconds * (2**attempt))
@@ -238,15 +257,32 @@ class SteamAPIClient:
     def _get_text(self, url: str, params: dict[str, object]) -> str:
         transport = self.text_transport or self._default_text_transport
         last_error: Exception | None = None
+        endpoint = steam_endpoint_name(url)
+        collector = current_telemetry()
+        if collector is not None:
+            collector.record_steam_request(endpoint)
         for attempt in range(self.retries):
+            started = time.perf_counter()
             try:
                 payload = transport(url, params)
                 if not isinstance(payload, str):
                     raise ValueError(f"Steam returned a non-text response for {url}")
+                if collector is not None:
+                    collector.record_steam_attempt(
+                        endpoint,
+                        success=True,
+                        latency_ms=(time.perf_counter() - started) * 1000,
+                    )
                 if self.request_delay_seconds:
                     time.sleep(self.request_delay_seconds)
                 return payload
             except Exception as exc:
+                if collector is not None:
+                    collector.record_steam_attempt(
+                        endpoint,
+                        success=False,
+                        latency_ms=(time.perf_counter() - started) * 1000,
+                    )
                 last_error = exc
                 if attempt + 1 < self.retries:
                     time.sleep(self.backoff_seconds * (2**attempt))
