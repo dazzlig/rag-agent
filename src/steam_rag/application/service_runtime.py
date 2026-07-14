@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import threading
 from dataclasses import dataclass
 from datetime import timedelta
 from difflib import SequenceMatcher
@@ -24,6 +26,11 @@ from steam_rag.game_recommendation.similarity_ranker import (
     describe_similarity_spec,
     rank_similar_profiles,
     resolve_reference_game,
+)
+from steam_rag.rag_search.reranker import (
+    DEFAULT_RERANKER_MODEL,
+    CrossEncoderReranker,
+    Reranker,
 )
 from steam_rag.rag_search.vector_store import VectorIndex
 from steam_rag.steam_collection.corpus_manager import OnDemandCorpusManager, CorpusUpdate, explicit_appid_from_question
@@ -50,10 +57,39 @@ class SteamServiceRuntime:
         paths: ServicePaths | None = None,
         embedding_model: str = "text-embedding-3-small",
         answer_model: str = "gpt-5-mini",
+        enable_reranker: bool | None = None,
+        reranker_model: str = DEFAULT_RERANKER_MODEL,
     ) -> None:
         self.paths = paths or ServicePaths()
         self.embedding_model = embedding_model
         self.answer_model = answer_model
+        self.enable_reranker = enable_reranker
+        self.reranker_model = reranker_model
+        self._reranker: Reranker | None = None
+        self._reranker_lock = threading.Lock()
+
+    def _get_reranker(self) -> Reranker | None:
+        """Return one lazy cross-encoder per service runtime.
+
+        Constructing ``CrossEncoderReranker`` does not load or download the
+        model.  The expensive model is loaded only on the first real rerank.
+        Tests and low-resource prototype runs can opt out with the constructor
+        flag or ``STEAM_RAG_ENABLE_RERANKER=0``.
+        """
+
+        enabled = self.enable_reranker
+        if enabled is None:
+            enabled = _env_flag("STEAM_RAG_ENABLE_RERANKER", default=True)
+        if not enabled:
+            return None
+        if self._reranker is None:
+            with self._reranker_lock:
+                if self._reranker is None:
+                    model_name = os.getenv(
+                        "STEAM_RAG_RERANKER_MODEL", self.reranker_model
+                    ).strip()
+                    self._reranker = CrossEncoderReranker(model_name or DEFAULT_RERANKER_MODEL)
+        return self._reranker
 
     def ask(
         self,
@@ -133,11 +169,12 @@ class SteamServiceRuntime:
             index_path=self.paths.index_path,
             max_age=timedelta(hours=24),
         )
+        expected_game_count = _expected_game_count(question)
         updates = manager.ensure_questions(
             variants,
             embedder,
             strict=False,
-            max_games=_expected_game_count(question),
+            max_games=expected_game_count,
         )
         if not self.paths.index_path.exists():
             raise FileNotFoundError(
@@ -147,17 +184,37 @@ class SteamServiceRuntime:
             self.paths.index_path,
             embedder,
             generator,
+            reranker=self._get_reranker(),
             rerank_candidates=24,
         )
         target_appids = list(dict.fromkeys(update.game.appid for update in updates))
         explicit_appid = explicit_appid_from_question(question)
         if explicit_appid is not None and explicit_appid not in target_appids:
             target_appids.insert(0, explicit_appid)
-        if not target_appids:
-            target_appids = _index_appids_for_variants(
+        if len(target_appids) < expected_game_count:
+            indexed_targets = _index_appids_for_variants(
                 pipeline,
                 variants,
-                limit=_expected_game_count(question),
+                limit=expected_game_count,
+            )
+            target_appids.extend(
+                appid for appid in indexed_targets if appid not in target_appids
+            )
+        indexed_appids = {
+            int(document.metadata["appid"])
+            for document in pipeline.index.documents
+            if str(document.metadata.get("appid") or "").isdigit()
+        }
+        target_appids = [appid for appid in target_appids if appid in indexed_appids]
+        if expected_game_count > 1 and len(target_appids) < expected_game_count:
+            resolved_names = ", ".join(
+                update.game.name for update in updates if update.game.appid in target_appids
+            ) or "없음"
+            raise LookupError(
+                "비교 질문은 모든 게임의 문서와 인덱스가 준비되어야 합니다. "
+                f"필요한 게임 {expected_game_count}개 중 {len(target_appids)}개만 확인했습니다"
+                f"(확인된 게임: {resolved_names}). 누락된 비교 대상의 정식명, 영문명, "
+                "Steam URL 또는 appid를 포함해 다시 질문해 주세요. 부분 비교는 실행하지 않았습니다."
             )
         if not target_appids:
             raise LookupError(
@@ -300,8 +357,8 @@ class SteamServiceRuntime:
                 item.appid: {
                     "candidate_name": item.name,
                     "reason": (
-                        f"{similarity_spec.seed.name}와 "
-                        f"{', '.join(item.matched_aspects[:4])}이 겹칩니다."
+                        f"{similarity_spec.seed.name}와 공통 요소: "
+                        f"{', '.join(item.matched_aspects[:4])}."
                     ),
                     "similarity_score": item.score,
                     "matched_aspects": list(item.matched_aspects),
@@ -557,7 +614,19 @@ def _is_broad_recommendation(question: str) -> bool:
 
 
 def _expected_game_count(question: str) -> int:
-    return 2 if re.search(r"비교|(?:와|과|vs\.?|VS\.?).*(?:중|차이|비교)", question) else 1
+    comparison = re.search(
+        r"비교|\bvs\.?\b|(?:와|과|랑|이랑).*(?:중|차이|어느|뭐가)",
+        question,
+        flags=re.IGNORECASE,
+    )
+    return 2 if comparison else 1
+
+
+def _env_flag(name: str, *, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return default
+    return value.strip().casefold() not in {"0", "false", "no", "off"}
 
 
 def _requires_verified_discovery_scope(question: str, query: Any) -> bool:
@@ -781,6 +850,7 @@ def _candidate_payload(candidate: Any, *, discovery_info: dict[str, Any] | None 
         "matched_facets": list(candidate.matched_facets)[:5],
         "positive_ratio": review.get("positive_ratio"),
         "sample_size": review.get("sample_size"),
+        "is_free": price.get("is_free") is True,
         "discount_percent": price.get("discount_percent", 0),
         "price": int(final_price / 100) if isinstance(final_price, (int, float)) else None,
         "release_date": profile.get("release_date") or "",
@@ -829,7 +899,11 @@ def _recommendation_markdown(
         ratio = item.get("positive_ratio")
         rating = f" · 최근 표본 긍정 {ratio * 100:.0f}%" if isinstance(ratio, (int, float)) else ""
         discount = item.get("discount_percent") or 0
-        sale = f" · {discount}% 할인" if discount else ""
+        sale = (
+            " · 무료 플레이"
+            if item.get("is_free")
+            else (f" · {discount}% 할인" if discount else "")
+        )
         release = f" · 출시일 {item['release_date']}" if getattr(query, "upcoming_required", False) and item.get("release_date") else ""
         lines.append(f"{rank}. **{item['name']}** — {reason}{rating}{sale}{release}")
     lines.append("")

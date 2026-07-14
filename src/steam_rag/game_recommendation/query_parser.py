@@ -84,6 +84,7 @@ class RecommendationQuery(BaseModel):
     after_update_required: bool = False
     sale_required: bool = False
     upcoming_required: bool = False
+    currently_playable_required: bool = False
     price_max_krw: int | None = None
     excluded_conditions: list[str] = Field(default_factory=list)
 
@@ -183,6 +184,16 @@ def parse_recommendation_query(question: str) -> RecommendationQuery:
         after_update_required=bool(re.search(r"(?:업데이트|패치).*(?:이후|후)|(?:이후|후).*(?:평가|리뷰)", question)),
         sale_required=bool(re.search(r"현재.*(?:세일|할인)|(?:세일|할인)\s*중", question)),
         upcoming_required=bool(re.search(r"앞으로\s*나올|출시\s*예정|미출시|신작.*(?:예정|기대)|기대작", question)),
+        currently_playable_required=bool(
+            re.search(
+                r"Steam에서\s*(?:(?:지금|현재)\s*)?(?:할|플레이할|즐길)\s*수\s*있|"
+                r"Steam에서\s*(?:플레이|이용|구매)\s*가능|"
+                r"(?:지금|현재)\s*(?:플레이|이용|구매)\s*가능|"
+                r"(?:지금|현재)\s*(?:할|플레이할|즐길)\s*수\s*있",
+                question,
+                flags=re.IGNORECASE,
+            )
+        ),
         price_max_krw=price_max,
         excluded_conditions=excluded,
     ).normalized()
@@ -216,7 +227,9 @@ class OpenAIRecommendationQueryStructurer:
                             "combat/perspective/dimension/playstyle은 정규화된 snake_case facet이다. "
                             "질문에 없는 조건을 추측하지 않는다. 가격은 한국 원화 정수로 변환한다. "
                             "sale_required는 사용자가 현재 할인 중인 게임을 요구할 때만 true다. "
-                            "upcoming_required는 아직 출시되지 않은 출시 예정작을 요구할 때만 true다."
+                            "upcoming_required는 아직 출시되지 않은 출시 예정작을 요구할 때만 true다. "
+                            "currently_playable_required는 사용자가 Steam에서 지금 플레이할 수 있는 "
+                            "게임을 요구할 때만 true다."
                         ),
                     },
                     {"role": "user", "content": question},
@@ -237,6 +250,10 @@ class OpenAIRecommendationQueryStructurer:
                         ),
                         "sale_required": parsed.sale_required or fallback.sale_required,
                         "upcoming_required": parsed.upcoming_required or fallback.upcoming_required,
+                        "currently_playable_required": (
+                            parsed.currently_playable_required
+                            or fallback.currently_playable_required
+                        ),
                         "price_max_krw": parsed.price_max_krw or fallback.price_max_krw,
                     }
                 )
@@ -399,9 +416,19 @@ class RecommendationProfileIndex:
                 return False
         if query.sale_required:
             price = profile.get("price") or {}
-            if not isinstance(price, dict) or int(price.get("discount_percent") or 0) <= 0:
+            if (
+                not isinstance(price, dict)
+                or price.get("is_free") is True
+                or int(price.get("discount_percent") or 0) <= 0
+            ):
                 return False
         if query.upcoming_required and profile.get("release_coming_soon") is not True:
+            return False
+        if (
+            query.currently_playable_required
+            and not query.upcoming_required
+            and profile.get("release_coming_soon") is True
+        ):
             return False
         return True
 

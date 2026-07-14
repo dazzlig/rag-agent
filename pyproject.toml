@@ -45,6 +45,9 @@ pandas = "2.*"
 # 사용자 인터페이스 관련 패키지
 streamlit = "1.*"
 gradio = "5.*"
+fastapi = "0.*"
+uvicorn = "0.*"
+chromadb = "0.*"
 jupyter = "1.*"
 notebook = "7.*"
 

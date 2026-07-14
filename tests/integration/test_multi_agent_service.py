@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Sequence
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import _bootstrap  # noqa: F401
 from fastapi.testclient import TestClient
@@ -13,6 +15,8 @@ from steam_rag.agents.multi_agent_workflow import MultiAgentConfig, SteamMultiAg
 from steam_rag.api.service_app import create_service_app
 from steam_rag.application.rag_pipeline import RAGPipeline
 from steam_rag.application.service_runtime import (
+    ServicePaths,
+    _expected_game_count,
     _index_appids_for_variants,
     _followup_relation,
     _resolve_candidate,
@@ -22,10 +26,12 @@ from steam_rag.application.service_runtime import (
     _steam_header_image,
     SteamServiceRuntime,
 )
-from steam_rag.common.models import Document, SearchResult
+from steam_rag.common.models import Document, RAGAnswer, SearchResult
 from steam_rag.external_apis.openai_client import OpenAIAnswerGenerator
 from steam_rag.rag_search.hybrid_retriever import HybridTimeAwareRetriever
 from steam_rag.rag_search.vector_store import build_index
+from steam_rag.steam_collection.corpus_manager import CorpusUpdate
+from steam_rag.steam_collection.steam_client import SteamGame
 
 
 class FakeEmbedder:
@@ -114,6 +120,12 @@ class EmptyCompletionClient:
 
 
 class MultiAgentServiceTests(unittest.TestCase):
+    def test_comparison_contract_detects_bare_vs_and_korean_connectors(self) -> None:
+        self.assertEqual(_expected_game_count("PEAK vs R.E.P.O. 뭐가 더 좋아?"), 2)
+        self.assertEqual(_expected_game_count("PEAK랑 R.E.P.O. 중 4명이 하기 좋은 게임은?"), 2)
+        self.assertEqual(_expected_game_count("PEAK의 최근 평가는?"), 1)
+        self.assertEqual(_expected_game_count("친구들과 하기 더 좋은 협동 게임 추천해줘"), 1)
+
     def test_web_search_is_reserved_for_non_steam_candidate_discovery(self) -> None:
         standard = SimpleNamespace(upcoming_required=False, sale_required=False)
         sale = SimpleNamespace(upcoming_required=False, sale_required=True)
@@ -577,6 +589,133 @@ class MultiAgentServiceTests(unittest.TestCase):
         self.assertIn("40% 할인", answer)
         self.assertNotIn("playstyle_facets", answer)
         self.assertNotIn("story_rich", answer)
+
+    def test_recommendation_output_labels_free_games_without_fake_discount(self) -> None:
+        answer = _recommendation_markdown(
+            "Steam에서 지금 할 수 있는 무료 게임 추천해줘",
+            [
+                {
+                    "name": "Free Example",
+                    "store_summary": "친구들과 함께 즐기는 무료 협동 게임입니다.",
+                    "genres": ["Action"],
+                    "popular_tags": ["협동"],
+                    "positive_ratio": None,
+                    "is_free": True,
+                    "discount_percent": 100,
+                    "release_date": "",
+                }
+            ],
+            {},
+            SimpleNamespace(sale_required=False, upcoming_required=False),
+        )
+
+        self.assertIn("무료 플레이", answer)
+        self.assertNotIn("100% 할인", answer)
+
+    def test_comparison_runs_only_after_both_games_are_indexed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            paths = ServicePaths(
+                docs_dir=root / "docs",
+                index_path=root / "index",
+                raw_dir=root / "raw",
+                catalog_path=root / "catalog.json",
+                profiles_dir=root / "profiles",
+                service_db=root / "service.db",
+                time_analysis_dir=root / "time",
+            )
+            paths.index_path.mkdir(parents=True)
+            updates = [
+                CorpusUpdate(SteamGame(101, "Alpha"), root / "alpha.md", False, False, "fresh"),
+                CorpusUpdate(SteamGame(202, "Beta"), root / "beta.md", False, False, "fresh"),
+            ]
+            pipeline = SimpleNamespace(
+                index=SimpleNamespace(
+                    documents=[
+                        Document("Alpha", {"appid": 101}),
+                        Document("Beta", {"appid": 202}),
+                    ]
+                ),
+                ask_multi_agent=MagicMock(
+                    return_value=RAGAnswer("Alpha와 Beta 중 비교", "비교 답변", [])
+                ),
+            )
+            runtime = SteamServiceRuntime(paths=paths, enable_reranker=True)
+            with (
+                patch(
+                    "steam_rag.application.service_runtime.OpenAIEmbedder",
+                    return_value=FakeEmbedder(),
+                ),
+                patch(
+                    "steam_rag.application.service_runtime.OpenAIAnswerGenerator",
+                    return_value=FakeGenerator(),
+                ),
+                patch("steam_rag.application.service_runtime.QueryExpansionAgent") as expansion_type,
+                patch("steam_rag.application.service_runtime.OnDemandCorpusManager") as manager_type,
+                patch(
+                    "steam_rag.application.service_runtime.RAGPipeline.from_path",
+                    return_value=pipeline,
+                ) as from_path,
+            ):
+                expansion_type.return_value.expand.return_value = ["Alpha", "Beta"]
+                manager_type.return_value.ensure_questions.return_value = updates
+                runtime._research("Alpha와 Beta 중 어떤 게임이 좋아?", top_k=2)
+
+        self.assertEqual(
+            pipeline.ask_multi_agent.call_args.kwargs["allowed_appids"],
+            [101, 202],
+        )
+        reranker = from_path.call_args.kwargs["reranker"]
+        self.assertIs(reranker, runtime._get_reranker())
+        self.assertIsNone(reranker._model)
+
+    def test_comparison_stops_before_langgraph_when_one_game_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            paths = ServicePaths(
+                docs_dir=root / "docs",
+                index_path=root / "index",
+                raw_dir=root / "raw",
+                catalog_path=root / "catalog.json",
+                profiles_dir=root / "profiles",
+                service_db=root / "service.db",
+                time_analysis_dir=root / "time",
+            )
+            paths.index_path.mkdir(parents=True)
+            updates = [
+                CorpusUpdate(SteamGame(101, "Alpha"), root / "alpha.md", False, False, "fresh")
+            ]
+            pipeline = SimpleNamespace(
+                index=SimpleNamespace(documents=[Document("Alpha", {"appid": 101})]),
+                ask_multi_agent=MagicMock(),
+            )
+            runtime = SteamServiceRuntime(paths=paths, enable_reranker=False)
+            with (
+                patch(
+                    "steam_rag.application.service_runtime.OpenAIEmbedder",
+                    return_value=FakeEmbedder(),
+                ),
+                patch(
+                    "steam_rag.application.service_runtime.OpenAIAnswerGenerator",
+                    return_value=FakeGenerator(),
+                ),
+                patch("steam_rag.application.service_runtime.QueryExpansionAgent") as expansion_type,
+                patch("steam_rag.application.service_runtime.OnDemandCorpusManager") as manager_type,
+                patch(
+                    "steam_rag.application.service_runtime.RAGPipeline.from_path",
+                    return_value=pipeline,
+                ),
+                patch(
+                    "steam_rag.application.service_runtime._index_appids_for_variants",
+                    return_value=[101],
+                ),
+            ):
+                expansion_type.return_value.expand.return_value = ["Alpha", "Beta"]
+                manager_type.return_value.ensure_questions.return_value = updates
+                with self.assertRaisesRegex(LookupError, "부분 비교는 실행하지 않았습니다"):
+                    runtime._research("Alpha와 Beta 중 어떤 게임이 좋아?", top_k=2)
+
+        pipeline.ask_multi_agent.assert_not_called()
 
     def test_empty_model_output_falls_back_to_retrieved_evidence(self) -> None:
         client = EmptyCompletionClient()

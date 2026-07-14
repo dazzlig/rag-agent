@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from typing import Protocol, Sequence
 
 from steam_rag.common.models import SearchResult
@@ -28,6 +29,7 @@ class CrossEncoderReranker:
         self.model_name = model_name
         self.max_length = max_length
         self._model: object | None = None
+        self._load_lock = threading.Lock()
 
     def rerank(self, question: str, results: Sequence[SearchResult], *, top_n: int) -> list[SearchResult]:
         if top_n <= 0:
@@ -52,14 +54,17 @@ class CrossEncoderReranker:
     def _load_model(self) -> object:
         if self._model is not None:
             return self._model
-        try:
-            from sentence_transformers import CrossEncoder
-        except ImportError as exc:
-            raise RuntimeError(
-                "cross-encoder reranker를 사용하려면 sentence-transformers가 필요합니다. "
-                "`poetry install` 또는 `pip install sentence-transformers` 후 다시 실행하세요."
-            ) from exc
-        self._model = CrossEncoder(self.model_name, max_length=self.max_length)
+        with self._load_lock:
+            if self._model is not None:
+                return self._model
+            try:
+                from sentence_transformers import CrossEncoder
+            except ImportError as exc:
+                raise RuntimeError(
+                    "cross-encoder reranker를 사용하려면 sentence-transformers가 필요합니다. "
+                    "`poetry install` 또는 `pip install sentence-transformers` 후 다시 실행하세요."
+                ) from exc
+            self._model = CrossEncoder(self.model_name, max_length=self.max_length)
         return self._model
 
     def _document_text(self, result: SearchResult) -> str:

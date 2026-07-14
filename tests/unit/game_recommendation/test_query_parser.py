@@ -30,6 +30,7 @@ def profile(
     positive_ratio: float | None = None,
     price_final: int = 30_000 * 100,
     discount_percent: int = 0,
+    is_free: bool = False,
     app_type: str = "game",
     release_coming_soon: bool = False,
 ) -> dict:
@@ -53,6 +54,7 @@ def profile(
             "currency": "KRW",
             "final": price_final,
             "discount_percent": discount_percent,
+            "is_free": is_free,
         },
         "searchable_terms": [tag for tag, _ in tags],
     }
@@ -75,9 +77,11 @@ class RecommendationTests(unittest.TestCase):
     def test_rule_parser_preserves_sale_and_upcoming_requirements(self) -> None:
         sale = parse_recommendation_query("현재 세일 중인 스토리 RPG 5개 추천")
         upcoming = parse_recommendation_query("앞으로 나올 신작 RPG 기대작 5개")
+        playable = parse_recommendation_query("Steam에서 지금 할 수 있는 서브컬처 게임 추천")
 
         self.assertTrue(sale.sale_required)
         self.assertTrue(upcoming.upcoming_required)
+        self.assertTrue(playable.currently_playable_required)
 
     def test_hard_filter_and_top20_to_top5_selection(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -186,17 +190,34 @@ class RecommendationTests(unittest.TestCase):
         profiles = [
             (Path("sale.json"), profile(1, "Sale Game", tags=[], discount_percent=30)),
             (Path("full.json"), profile(2, "Full Price", tags=[])),
-            (Path("upcoming.json"), profile(3, "Upcoming", tags=[], release_coming_soon=True)),
+            (Path("upcoming.json"), profile(3, "NTE", tags=[], release_coming_soon=True)),
             (Path("dlc.json"), profile(4, "Expansion", tags=[], app_type="dlc", discount_percent=50)),
             (Path("generic.json"), profile(5, "Games", tags=[], discount_percent=50)),
+            (
+                Path("free.json"),
+                profile(
+                    6,
+                    "Free To Play",
+                    tags=[],
+                    discount_percent=100,
+                    is_free=True,
+                    price_final=0,
+                ),
+            ),
         ]
         index = RecommendationProfileIndex(profiles)
 
         sale = index.search("현재 세일", RecommendationQuery(sale_required=True))
         upcoming = index.search("출시 예정", RecommendationQuery(upcoming_required=True))
+        playable = index.search(
+            "Steam에서 지금 할 수 있는 게임",
+            RecommendationQuery(currently_playable_required=True),
+        )
 
         self.assertEqual([item.appid for item in sale.candidates], [1])
         self.assertEqual([item.appid for item in upcoming.candidates], [3])
+        self.assertNotIn(3, [item.appid for item in playable.candidates])
+        self.assertIn(6, [item.appid for item in playable.candidates])
 
 
 if __name__ == "__main__":

@@ -1,0 +1,3 @@
+﻿case_count,strategy,operations.latency_ms,operations.result_count,recommendation.constraint_claim_coverage,recommendation.recommended_game_recall,retrieval.claim_evidence_coverage,retrieval.context_precision,retrieval.evidence_keyword_recall,retrieval.game_recall,retrieval.section_recall,temporal.dated_context_ratio,temporal.patch_date_accuracy
+50,agentic,2380.7136,5.0,1.0,0.833333,0.936666,0.692,0.82,0.965909,0.92,0.812,1.0
+50,agentic_hyde,14703.66228,5.0,1.0,1.0,0.926666,0.708,0.82,0.965909,0.91,0.82,1.0

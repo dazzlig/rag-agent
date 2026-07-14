@@ -18,7 +18,14 @@ data/raw/week8_timeaware/
 data/steam_service.db
 data/time_analysis/
 data/vectorstore/
+# Keep only the canonical Stage 4 reproducibility inputs/results.
+# Smoke variants and per-case benchmark outputs are regenerable artifacts.
 data/eval/stage4_*
+!data/eval/stage4_golden_set.jsonl
+!data/eval/stage4_agent_retrieval_summary.csv
+!data/eval/stage4_agent_generation_smoke_summary.csv
+data/eval/conversation_benchmark_details.jsonl
+data/eval/conversation_benchmark_summary.json
 data/eval/week5_*
 data/eval/week6_*
 data/eval/week8_*

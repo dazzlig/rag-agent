@@ -46,6 +46,15 @@ TAVILY_SEARCH_DEPTH=basic
 
 Python 3.11과 Poetry 환경을 기준으로 합니다. `.env`의 기존 `OPENAI_API_KEY`를 사용합니다.
 
+사용자용 서비스는 기본적으로 `BAAI/bge-reranker-v2-m3`를 lazy-load해 Agentic 검색 후보를
+재정렬합니다. 모델은 첫 실제 검색 때 한 번 로드되며, 저사양 환경이나 진단 실행에서는 다음처럼
+비활성화할 수 있습니다.
+
+```dotenv
+STEAM_RAG_ENABLE_RERANKER=0
+# STEAM_RAG_RERANKER_MODEL=BAAI/bge-reranker-v2-m3
+```
+
 ```powershell
 poetry install
 poetry run steam-rag build
@@ -100,6 +109,21 @@ $env:PYTHONPATH = "src"
 python -m unittest discover -s tests -v
 ```
 
+GitHub Actions도 Python 3.11에서 Poetry lock 검사, 전체 테스트, `compileall`, 웹 JavaScript
+문법 검사를 같은 순서로 실행합니다.
+
+20개 시나리오·42개 턴으로 구성된 서비스 대화 Golden Set은 먼저 외부 API 호출 없이 스키마와
+계약을 검사할 수 있습니다.
+
+```powershell
+$env:PYTHONPATH = "src"
+python -m steam_rag.cli evaluate-conversations --validate-only
+```
+
+실제 서비스 응답까지 평가하는 `evaluate-conversations` 실행은 OpenAI·Steam·Tavily 호출과 비용이
+발생할 수 있으므로 명시적으로 실행합니다. 상세 설계와 휴리스틱/RAGAS 구분은
+`docs/agent_evaluation_stage4.md`를 참고하세요.
+
 ## 주요 모듈
 
 - `src/steam_rag/steam_collection/`: Steam Store/Review/News 수집, 인기 태그 HTML 수집, 표준 Markdown 생성
@@ -111,7 +135,7 @@ python -m unittest discover -s tests -v
 - `src/steam_rag/application/`: RAG 파이프라인과 서비스 런타임 오케스트레이션
 - `src/steam_rag/api/`: FastAPI 서비스 앱
 - `src/steam_rag/ui/`: Gradio 검증 UI와 사용자용 웹 UI 정적 파일
-- `src/steam_rag/evaluation_tools/`: Golden Set 기반 Agentic/HyDE 검색·생성·인용·시간·추천 지표 평가
+- `src/steam_rag/evaluation_tools/`: Agentic/HyDE 검색 평가와 멀티턴 서비스 계약 평가
 - `src/steam_rag/external_apis/`: OpenAI와 Tavily 어댑터
 - `src/steam_rag/cli.py`: build/search/ask/inspect/recommend/time-analysis 명령
 - 플레이스타일 metadata는 Steam 인기 태그, genre/category, 상점 설명, 최근 리뷰에서 자동 생성하며 수동 profile 파일은 실행 경로에서 사용하지 않음

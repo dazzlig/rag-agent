@@ -11,9 +11,12 @@ from steam_rag.application.rag_pipeline import RAGPipeline
 from steam_rag.evaluation_tools.benchmark import (
     STAGE4_STRATEGIES,
     SUPPORTED_STRATEGIES,
+    ServiceConversationBenchmarkRunner,
     Stage4BenchmarkRunner,
+    load_conversation_golden_set,
     load_golden_set,
     save_benchmark,
+    save_conversation_benchmark,
 )
 from steam_rag.external_apis.openai_client import OpenAIAnswerGenerator, OpenAIEmbedder, load_env_file
 from steam_rag.game_analysis.time_aware import run_time_analysis_and_index
@@ -42,6 +45,9 @@ DEFAULT_SERVICE_DB = Path("data/steam_service.db")
 DEFAULT_STAGE4_GOLDEN = Path("data/eval/stage4_golden_set.jsonl")
 DEFAULT_STAGE4_DETAILS = Path("data/eval/stage4_benchmark_details.jsonl")
 DEFAULT_STAGE4_SUMMARY = Path("data/eval/stage4_benchmark_summary.csv")
+DEFAULT_CONVERSATION_GOLDEN = Path("data/eval/conversation_golden_set_v1.jsonl")
+DEFAULT_CONVERSATION_DETAILS = Path("data/eval/conversation_benchmark_details.jsonl")
+DEFAULT_CONVERSATION_SUMMARY = Path("data/eval/conversation_benchmark_summary.json")
 
 
 def _add_corpus_arguments(command: argparse.ArgumentParser) -> None:
@@ -171,6 +177,36 @@ def _parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--limit", type=int, default=0)
     evaluate.add_argument("--retrieval-only", action="store_true")
 
+    evaluate_conversations = subparsers.add_parser(
+        "evaluate-conversations",
+        help="Validate or run the 20-case Korean multi-turn service Golden Set",
+    )
+    evaluate_conversations.add_argument(
+        "--golden-set", type=Path, default=DEFAULT_CONVERSATION_GOLDEN
+    )
+    evaluate_conversations.add_argument(
+        "--details-output", type=Path, default=DEFAULT_CONVERSATION_DETAILS
+    )
+    evaluate_conversations.add_argument(
+        "--summary-output", type=Path, default=DEFAULT_CONVERSATION_SUMMARY
+    )
+    evaluate_conversations.add_argument("--docs", type=Path, default=DEFAULT_DOCS)
+    evaluate_conversations.add_argument("--index", type=Path, default=DEFAULT_INDEX)
+    evaluate_conversations.add_argument("--raw", type=Path, default=DEFAULT_RAW)
+    evaluate_conversations.add_argument("--catalog", type=Path, default=DEFAULT_CATALOG)
+    evaluate_conversations.add_argument("--profiles", type=Path, default=DEFAULT_PROFILES)
+    evaluate_conversations.add_argument("--service-db", type=Path, default=DEFAULT_SERVICE_DB)
+    evaluate_conversations.add_argument("--time-analysis", type=Path, default=DEFAULT_TIME_ANALYSIS)
+    evaluate_conversations.add_argument("--embedding-model", default="text-embedding-3-small")
+    evaluate_conversations.add_argument("--answer-model", default="gpt-5-mini")
+    evaluate_conversations.add_argument("--top-k", type=int, default=6)
+    evaluate_conversations.add_argument("--limit", type=int, default=0)
+    evaluate_conversations.add_argument(
+        "--validate-only",
+        action="store_true",
+        help="Validate the Golden Set schema without loading the service or calling external APIs",
+    )
+
     collect = subparsers.add_parser(
         "collect",
         help="Collect one Steam game into combined Markdown and upsert the vector store",
@@ -238,6 +274,24 @@ def main(argv: list[str] | None = None) -> int:
                     "embedding_model": index.embedding_model,
                     "document_count": len(index.documents),
                     "sections": sections,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 0
+
+    if args.command == "evaluate-conversations" and args.validate_only:
+        cases = load_conversation_golden_set(args.golden_set)
+        print(
+            json.dumps(
+                {
+                    "valid": True,
+                    "golden_set": str(args.golden_set),
+                    "case_count": len(cases),
+                    "turn_count": sum(len(case.turns) for case in cases),
+                    "categories": sorted({case.category for case in cases}),
+                    "external_calls": False,
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -465,6 +519,48 @@ def main(argv: list[str] | None = None) -> int:
                     "strategies": args.strategies,
                     "record_count": len(records),
                     "retrieval_only": args.retrieval_only,
+                    "details_output": str(args.details_output),
+                    "summary_output": str(args.summary_output),
+                    "summary": summary,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 0
+
+    if args.command == "evaluate-conversations":
+        # Imported only for an explicit live evaluation. Validation and unit tests stay offline.
+        from steam_rag.application.service_runtime import ServicePaths, SteamServiceRuntime
+
+        cases = load_conversation_golden_set(args.golden_set)
+        if args.limit > 0:
+            cases = cases[: args.limit]
+        runtime = SteamServiceRuntime(
+            paths=ServicePaths(
+                docs_dir=args.docs,
+                index_path=args.index,
+                raw_dir=args.raw,
+                catalog_path=args.catalog,
+                profiles_dir=args.profiles,
+                service_db=args.service_db,
+                time_analysis_dir=args.time_analysis,
+            ),
+            embedding_model=args.embedding_model,
+            answer_model=args.answer_model,
+        )
+        records = ServiceConversationBenchmarkRunner(runtime, top_k=args.top_k).run(cases)
+        summary = save_conversation_benchmark(
+            records,
+            details_path=args.details_output,
+            summary_path=args.summary_output,
+        )
+        print(
+            json.dumps(
+                {
+                    "golden_set": str(args.golden_set),
+                    "case_count": len(cases),
+                    "turn_count": len(records),
                     "details_output": str(args.details_output),
                     "summary_output": str(args.summary_output),
                     "summary": summary,

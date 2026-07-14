@@ -7,7 +7,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Protocol, Sequence
 
 from steam_rag.agents.agentic_rag import AgenticRAGConfig, AgenticRAGCoordinator
 from steam_rag.common.interfaces import AnswerGenerator, Embedder
@@ -20,6 +20,7 @@ from steam_rag.rag_search.vector_store import VectorIndex
 
 STAGE4_STRATEGIES = ("agentic", "agentic_hyde")
 SUPPORTED_STRATEGIES = ("basic", "hybrid", "reranker", *STAGE4_STRATEGIES)
+CONVERSATION_GOLDEN_SET_SIZE = 20
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +52,161 @@ class GoldenCase:
             expected_patch_date=str(value.get("expected_patch_date") or ""),
             notes=str(value.get("notes") or ""),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationTurnExpectation:
+    """Deterministic service contract for one conversation turn."""
+
+    mode: str
+    required_keywords: tuple[str, ...] = ()
+    appids: tuple[int, ...] = ()
+    answer_required: bool = True
+    context_used: bool | None = None
+    followup_relation: str = ""
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "ConversationTurnExpectation":
+        mode = str(value.get("mode") or "").strip()
+        if mode not in {"research", "recommendation"}:
+            raise ValueError("expected.mode must be 'research' or 'recommendation'")
+        answer_required = value.get("answer_required", True)
+        if not isinstance(answer_required, bool):
+            raise ValueError("expected.answer_required must be boolean")
+        return cls(
+            mode=mode,
+            required_keywords=_string_tuple(value.get("required_keywords")),
+            appids=_appid_tuple(value.get("appids")),
+            answer_required=answer_required,
+            context_used=_optional_bool(value, "context_used"),
+            followup_relation=str(value.get("followup_relation") or "").strip(),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationTurnForbidden:
+    """Content that must not leak into the answer or selected game set."""
+
+    keywords: tuple[str, ...] = ()
+    appids: tuple[int, ...] = ()
+    modes: tuple[str, ...] = ()
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "ConversationTurnForbidden":
+        modes = _string_tuple(value.get("modes"))
+        unknown_modes = set(modes) - {"research", "recommendation"}
+        if unknown_modes:
+            raise ValueError(f"forbidden.modes contains unsupported values: {sorted(unknown_modes)}")
+        return cls(
+            keywords=_string_tuple(value.get("keywords")),
+            appids=_appid_tuple(value.get("appids")),
+            modes=modes,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationTurn:
+    turn_id: str
+    question: str
+    expected: ConversationTurnExpectation
+    forbidden: ConversationTurnForbidden
+    notes: str = ""
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "ConversationTurn":
+        turn_id = str(value.get("id") or "").strip()
+        question = str(value.get("question") or "").strip()
+        if not turn_id:
+            raise ValueError("conversation turn id is required")
+        if not question:
+            raise ValueError(f"conversation turn {turn_id!r} question is required")
+        if "expected" not in value or not isinstance(value["expected"], dict):
+            raise ValueError(f"conversation turn {turn_id!r} requires an expected contract")
+        if "forbidden" not in value or not isinstance(value["forbidden"], dict):
+            raise ValueError(f"conversation turn {turn_id!r} requires a forbidden contract")
+        return cls(
+            turn_id=turn_id,
+            question=question,
+            expected=ConversationTurnExpectation.from_dict(value["expected"]),
+            forbidden=ConversationTurnForbidden.from_dict(value["forbidden"]),
+            notes=str(value.get("notes") or ""),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationCase:
+    case_id: str
+    category: str
+    title: str
+    turns: tuple[ConversationTurn, ...]
+    notes: str = ""
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "ConversationCase":
+        case_id = str(value.get("id") or "").strip()
+        category = str(value.get("category") or "").strip()
+        title = str(value.get("title") or "").strip()
+        raw_turns = value.get("turns")
+        if not case_id or not category or not title:
+            raise ValueError("conversation case id, category, and title are required")
+        if not isinstance(raw_turns, list):
+            raise ValueError(f"conversation case {case_id!r} turns must be a list")
+        turns = tuple(ConversationTurn.from_dict(turn) for turn in raw_turns)
+        if not 2 <= len(turns) <= 4:
+            raise ValueError(f"conversation case {case_id!r} must contain 2-4 turns")
+        turn_ids = [turn.turn_id for turn in turns]
+        if len(set(turn_ids)) != len(turn_ids):
+            raise ValueError(f"conversation case {case_id!r} turn ids must be unique")
+        return cls(case_id, category, title, turns, str(value.get("notes") or ""))
+
+
+class ConversationRuntime(Protocol):
+    def ask(
+        self,
+        question: str,
+        *,
+        top_k: int = 6,
+        history: list[dict[str, str]] | None = None,
+        context_games: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]: ...
+
+
+@dataclass(slots=True)
+class ConversationTurnRecord:
+    case_id: str
+    category: str
+    title: str
+    turn_id: str
+    turn_number: int
+    question: str
+    answer: str
+    mode: str
+    expected: dict[str, Any]
+    forbidden: dict[str, Any]
+    observed_appids: list[int]
+    latency_ms: float
+    error: str
+    metrics: dict[str, float | None]
+    payload: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "case_id": self.case_id,
+            "category": self.category,
+            "title": self.title,
+            "turn_id": self.turn_id,
+            "turn_number": self.turn_number,
+            "question": self.question,
+            "answer": self.answer,
+            "mode": self.mode,
+            "expected": self.expected,
+            "forbidden": self.forbidden,
+            "observed_appids": self.observed_appids,
+            "latency_ms": self.latency_ms,
+            "error": self.error,
+            "metrics": self.metrics,
+            "payload": self.payload,
+        }
 
 
 @dataclass(slots=True)
@@ -101,6 +257,206 @@ def load_golden_set(path: Path) -> list[GoldenCase]:
     if len({case.case_id for case in cases}) != len(cases):
         raise ValueError("Golden Set case ids must be unique")
     return cases
+
+
+def load_conversation_golden_set(path: Path) -> list[ConversationCase]:
+    """Load and validate the versioned, service-level conversation Golden Set."""
+
+    cases: list[ConversationCase] = []
+    for line_number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"Invalid conversation Golden Set JSONL at line {line_number}: {exc}"
+            ) from exc
+        if not isinstance(value, dict):
+            raise ValueError(f"Conversation Golden Set line {line_number} must be an object")
+        try:
+            cases.append(ConversationCase.from_dict(value))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Invalid conversation case at line {line_number}: {exc}") from exc
+    if len(cases) != CONVERSATION_GOLDEN_SET_SIZE:
+        raise ValueError(
+            f"Conversation Golden Set must contain exactly {CONVERSATION_GOLDEN_SET_SIZE} cases, "
+            f"found {len(cases)}"
+        )
+    if len({case.case_id for case in cases}) != len(cases):
+        raise ValueError("Conversation Golden Set case ids must be unique")
+    return cases
+
+
+class ServiceConversationBenchmarkRunner:
+    """Run the consumer service across complete, stateful conversation scenarios."""
+
+    def __init__(
+        self,
+        runtime: ConversationRuntime,
+        *,
+        top_k: int = 6,
+        history_limit: int = 8,
+    ) -> None:
+        self.runtime = runtime
+        self.top_k = max(1, min(int(top_k), 10))
+        self.history_limit = max(1, int(history_limit))
+
+    def run(self, cases: Sequence[ConversationCase]) -> list[ConversationTurnRecord]:
+        records: list[ConversationTurnRecord] = []
+        for case in cases:
+            history: list[dict[str, str]] = []
+            context_games: list[dict[str, Any]] = []
+            for turn_number, turn in enumerate(case.turns, start=1):
+                started = time.perf_counter()
+                payload: dict[str, Any] = {}
+                error = ""
+                try:
+                    raw_payload = self.runtime.ask(
+                        turn.question,
+                        top_k=self.top_k,
+                        history=list(history[-self.history_limit :]),
+                        context_games=list(context_games),
+                    )
+                    if not isinstance(raw_payload, dict):
+                        raise TypeError("runtime.ask() must return a dict payload")
+                    payload = raw_payload
+                except Exception as exc:  # Each failed turn remains observable in the report.
+                    error = f"{type(exc).__name__}: {exc}"
+                latency_ms = (time.perf_counter() - started) * 1000
+                answer = str(payload.get("answer") or "").strip()
+                observed_appids = sorted(_payload_appids(payload))
+                metrics = score_conversation_turn(turn, payload, error=error)
+                records.append(
+                    ConversationTurnRecord(
+                        case_id=case.case_id,
+                        category=case.category,
+                        title=case.title,
+                        turn_id=turn.turn_id,
+                        turn_number=turn_number,
+                        question=turn.question,
+                        answer=answer,
+                        mode=str(payload.get("mode") or ""),
+                        expected=_expectation_dict(turn.expected),
+                        forbidden=_forbidden_dict(turn.forbidden),
+                        observed_appids=observed_appids,
+                        latency_ms=round(latency_ms, 3),
+                        error=error,
+                        metrics=metrics,
+                        payload=payload,
+                    )
+                )
+                history.append({"role": "user", "content": turn.question})
+                context_games = _merge_context_games(context_games, payload.get("games"))
+        return records
+
+
+def score_conversation_turn(
+    turn: ConversationTurn,
+    payload: dict[str, Any],
+    *,
+    error: str = "",
+) -> dict[str, float | None]:
+    """Score explicit contracts only; no LLM or embedding call is made here."""
+
+    answer = str(payload.get("answer") or "").strip()
+    answer_text = answer.casefold()
+    mode = str(payload.get("mode") or "")
+    observed_appids = _payload_appids(payload)
+    expectation = turn.expected
+    forbidden = turn.forbidden
+
+    answer_presence = 1.0 if bool(answer) == expectation.answer_required else 0.0
+    required_keyword_recall = _keyword_recall(expectation.required_keywords, answer_text)
+    forbidden_keyword_leakage = _keyword_match_ratio(forbidden.keywords, answer_text)
+    expected_appid_recall = _set_recall(set(expectation.appids), observed_appids)
+    forbidden_appid_leakage = _set_hit_ratio(set(forbidden.appids), observed_appids)
+    mode_correctness = 1.0 if mode == expectation.mode else 0.0
+    forbidden_mode_leakage = 1.0 if mode and mode in forbidden.modes else 0.0
+    continuity = _continuity_score(expectation, payload)
+    error_rate = 1.0 if error else 0.0
+
+    required_checks = [answer_presence, mode_correctness, 1.0 - forbidden_mode_leakage]
+    if required_keyword_recall is not None:
+        required_checks.append(required_keyword_recall)
+    if expected_appid_recall is not None:
+        required_checks.append(expected_appid_recall)
+    if forbidden_keyword_leakage is not None:
+        required_checks.append(1.0 - forbidden_keyword_leakage)
+    if forbidden_appid_leakage is not None:
+        required_checks.append(1.0 - forbidden_appid_leakage)
+    if continuity is not None:
+        required_checks.append(continuity)
+    contract_pass = 1.0 if not error and all(value == 1.0 for value in required_checks) else 0.0
+    return {
+        "answer_presence": answer_presence,
+        "required_keyword_recall": required_keyword_recall,
+        "forbidden_keyword_leakage": forbidden_keyword_leakage,
+        "expected_appid_recall": expected_appid_recall,
+        "forbidden_appid_leakage": forbidden_appid_leakage,
+        "mode_correctness": mode_correctness,
+        "forbidden_mode_leakage": forbidden_mode_leakage,
+        "continuity": continuity,
+        "error_rate": error_rate,
+        "contract_pass": contract_pass,
+    }
+
+
+def summarize_conversation_records(
+    records: Sequence[ConversationTurnRecord],
+) -> dict[str, Any]:
+    latencies = [record.latency_ms for record in records]
+    metric_names = sorted({name for record in records for name in record.metrics})
+    metrics: dict[str, float | None] = {}
+    for name in metric_names:
+        values = [
+            float(record.metrics[name])
+            for record in records
+            if record.metrics.get(name) is not None
+        ]
+        metrics[name] = round(sum(values) / len(values), 6) if values else None
+    category_rows: list[dict[str, Any]] = []
+    for category in sorted({record.category for record in records}):
+        selected = [record for record in records if record.category == category]
+        category_rows.append(
+            {
+                "category": category,
+                "turn_count": len(selected),
+                "contract_pass_rate": _mean_metric(selected, "contract_pass"),
+                "error_rate": _mean_metric(selected, "error_rate"),
+            }
+        )
+    return {
+        "metric_family": "deterministic_contract_heuristics",
+        "case_count": len({record.case_id for record in records}),
+        "turn_count": len(records),
+        "metrics": metrics,
+        "latency_ms": {
+            "mean": round(sum(latencies) / len(latencies), 3) if latencies else None,
+            "p50": _percentile(latencies, 0.50),
+            "p95": _percentile(latencies, 0.95),
+            "max": round(max(latencies), 3) if latencies else None,
+        },
+        "categories": category_rows,
+    }
+
+
+def save_conversation_benchmark(
+    records: Sequence[ConversationTurnRecord],
+    *,
+    details_path: Path,
+    summary_path: Path,
+) -> dict[str, Any]:
+    details_path.parent.mkdir(parents=True, exist_ok=True)
+    details_path.write_text(
+        "\n".join(json.dumps(record.to_dict(), ensure_ascii=False) for record in records) + "\n",
+        encoding="utf-8",
+    )
+    summary = summarize_conversation_records(records)
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return summary
 
 
 class Stage4BenchmarkRunner:
@@ -371,3 +727,152 @@ def _extract_citations(answer: str) -> list[int]:
     for group in re.findall(r"\[근거\s*([0-9,\s]+)\]", answer):
         citations.extend(int(value) for value in re.findall(r"\d+", group))
     return citations
+
+
+def _string_tuple(value: Any) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise ValueError("contract string collections must be lists")
+    output = tuple(str(item).strip() for item in value if str(item).strip())
+    if len(set(output)) != len(output):
+        raise ValueError("contract string collections must not contain duplicates")
+    return output
+
+
+def _appid_tuple(value: Any) -> tuple[int, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise ValueError("contract appids must be lists")
+    try:
+        output = tuple(int(item) for item in value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("contract appids must contain integers") from exc
+    if any(appid <= 0 for appid in output):
+        raise ValueError("contract appids must be positive")
+    if len(set(output)) != len(output):
+        raise ValueError("contract appids must not contain duplicates")
+    return output
+
+
+def _optional_bool(value: dict[str, Any], key: str) -> bool | None:
+    if key not in value or value[key] is None:
+        return None
+    if not isinstance(value[key], bool):
+        raise ValueError(f"expected.{key} must be boolean or null")
+    return value[key]
+
+
+def _expectation_dict(expectation: ConversationTurnExpectation) -> dict[str, Any]:
+    return {
+        "mode": expectation.mode,
+        "required_keywords": list(expectation.required_keywords),
+        "appids": list(expectation.appids),
+        "answer_required": expectation.answer_required,
+        "context_used": expectation.context_used,
+        "followup_relation": expectation.followup_relation,
+    }
+
+
+def _forbidden_dict(forbidden: ConversationTurnForbidden) -> dict[str, Any]:
+    return {
+        "keywords": list(forbidden.keywords),
+        "appids": list(forbidden.appids),
+        "modes": list(forbidden.modes),
+    }
+
+
+def _payload_appids(payload: dict[str, Any]) -> set[int]:
+    """Collect verified game identities without counting unrelated numeric fields."""
+
+    appids: set[int] = set()
+
+    def visit(value: Any) -> None:
+        if isinstance(value, dict):
+            raw_appid = value.get("appid")
+            try:
+                appid = int(raw_appid)
+            except (TypeError, ValueError):
+                appid = 0
+            if appid > 0:
+                appids.add(appid)
+            for nested in value.values():
+                if isinstance(nested, (dict, list, tuple)):
+                    visit(nested)
+        elif isinstance(value, (list, tuple)):
+            for nested in value:
+                visit(nested)
+
+    for key in ("games", "corpus_updates"):
+        visit(payload.get(key))
+    return appids
+
+
+def _merge_context_games(
+    existing: Sequence[dict[str, Any]],
+    new_games: Any,
+) -> list[dict[str, Any]]:
+    latest: dict[int, dict[str, Any]] = {}
+    for raw in new_games if isinstance(new_games, list) else []:
+        if not isinstance(raw, dict):
+            continue
+        try:
+            appid = int(raw.get("appid"))
+        except (TypeError, ValueError):
+            continue
+        name = str(raw.get("name") or "").strip()
+        if appid > 0 and name:
+            latest[appid] = {"appid": appid, "name": name}
+    if latest:
+        return list(latest.values())
+
+    retained: dict[int, dict[str, Any]] = {}
+    for raw in existing:
+        try:
+            appid = int(raw.get("appid"))
+        except (AttributeError, TypeError, ValueError):
+            continue
+        name = str(raw.get("name") or "").strip()
+        if appid > 0 and name:
+            retained[appid] = {"appid": appid, "name": name}
+    return list(retained.values())
+
+
+def _keyword_match_ratio(keywords: Sequence[str], text: str) -> float | None:
+    return sum(keyword.casefold() in text for keyword in keywords) / len(keywords) if keywords else None
+
+
+def _set_hit_ratio(forbidden: set[Any], actual: set[Any]) -> float | None:
+    return len(forbidden & actual) / len(forbidden) if forbidden else None
+
+
+def _continuity_score(
+    expectation: ConversationTurnExpectation,
+    payload: dict[str, Any],
+) -> float | None:
+    checks: list[bool] = []
+    if expectation.context_used is not None:
+        checks.append(bool(payload.get("conversation_context_used")) == expectation.context_used)
+    if expectation.followup_relation:
+        observed_relation = str(payload.get("followup_relation") or "")
+        accepted_relations = (
+            {"detail", "continuation"}
+            if expectation.followup_relation == "detail"
+            else {expectation.followup_relation}
+        )
+        checks.append(observed_relation in accepted_relations)
+    return sum(checks) / len(checks) if checks else None
+
+
+def _mean_metric(records: Sequence[ConversationTurnRecord], name: str) -> float | None:
+    values = [float(record.metrics[name]) for record in records if record.metrics.get(name) is not None]
+    return round(sum(values) / len(values), 6) if values else None
+
+
+def _percentile(values: Sequence[float], quantile: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(float(value) for value in values)
+    index = max(0, min(len(ordered) - 1, math.ceil(quantile * len(ordered)) - 1))
+    return round(ordered[index], 3)
