@@ -74,6 +74,26 @@ class TelemetryTests(unittest.TestCase):
         self.assertEqual(snapshot["corpus"]["reused_count"], 1)
         self.assertEqual(snapshot["external_call_count"], 3)
 
+    def test_gpt_4o_mini_ragas_cost_uses_official_default_rate(self) -> None:
+        collector = TelemetryCollector()
+        collector.record_openai(
+            model="gpt-4o-mini",
+            operation="chat",
+            response={
+                "usage": {
+                    "prompt_tokens": 1_000_000,
+                    "completion_tokens": 1_000_000,
+                    "total_tokens": 2_000_000,
+                    "prompt_tokens_details": {"cached_tokens": 100_000},
+                }
+            },
+        )
+
+        snapshot = collector.snapshot()
+
+        self.assertEqual(snapshot["openai"]["estimated_cost_usd"], 0.7425)
+        self.assertEqual(snapshot["openai"]["unknown_cost_call_count"], 0)
+
     def test_nested_sessions_share_one_request_collector(self) -> None:
         with telemetry_session() as outer:
             with telemetry_session() as inner:

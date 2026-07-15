@@ -169,6 +169,7 @@ class ConversationRuntime(Protocol):
         top_k: int = 6,
         history: list[dict[str, str]] | None = None,
         context_games: list[dict[str, Any]] | None = None,
+        conversation_state: dict[str, Any] | None = None,
     ) -> dict[str, Any]: ...
 
 
@@ -311,18 +312,21 @@ class ServiceConversationBenchmarkRunner:
         for case in cases:
             history: list[dict[str, str]] = []
             context_games: list[dict[str, Any]] = []
+            conversation_state: dict[str, Any] = {}
             for turn_number, turn in enumerate(case.turns, start=1):
                 started = time.perf_counter()
                 payload: dict[str, Any] = {}
                 error = ""
                 with telemetry_session() as telemetry_collector:
                     try:
-                        raw_payload = self.runtime.ask(
-                            turn.question,
-                            top_k=self.top_k,
-                            history=list(history[-self.history_limit :]),
-                            context_games=list(context_games),
-                        )
+                        ask_kwargs: dict[str, Any] = {
+                            "top_k": self.top_k,
+                            "history": list(history[-self.history_limit :]),
+                            "context_games": list(context_games),
+                        }
+                        if conversation_state:
+                            ask_kwargs["conversation_state"] = dict(conversation_state)
+                        raw_payload = self.runtime.ask(turn.question, **ask_kwargs)
                         if not isinstance(raw_payload, dict):
                             raise TypeError("runtime.ask() must return a dict payload")
                         payload = raw_payload
@@ -355,6 +359,9 @@ class ServiceConversationBenchmarkRunner:
                 )
                 history.append({"role": "user", "content": turn.question})
                 context_games = _merge_context_games(context_games, payload.get("games"))
+                next_state = payload.get("conversation_state")
+                if isinstance(next_state, dict):
+                    conversation_state = dict(next_state)
         return records
 
 

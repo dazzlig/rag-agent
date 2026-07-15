@@ -19,15 +19,21 @@ from steam_rag.application.service_runtime import (
     _expected_game_count,
     _index_appids_for_variants,
     _followup_relation,
+    _is_broad_recommendation,
+    _merge_recommendation_query,
     _resolve_candidate,
     _requires_verified_discovery_scope,
     _should_use_web_discovery,
     _recommendation_markdown,
+    _source_payload,
+    _evidence_payload,
+    _claim_citations,
     _steam_header_image,
     SteamServiceRuntime,
 )
 from steam_rag.common.models import Document, RAGAnswer, SearchResult
 from steam_rag.external_apis.openai_client import OpenAIAnswerGenerator
+from steam_rag.game_recommendation.query_parser import RecommendationQuery
 from steam_rag.rag_search.hybrid_retriever import HybridTimeAwareRetriever
 from steam_rag.rag_search.vector_store import build_index
 from steam_rag.steam_collection.corpus_manager import CorpusUpdate
@@ -83,6 +89,7 @@ class FakeRuntime:
         self.last_history: list[dict] = []
         self.last_context_games: list[dict] = []
         self.call_count = 0
+        self.last_conversation_state: dict = {}
 
     def health(self) -> dict:
         return {"status": "ready", "documents": 2, "chunks": 10, "workflow": "LangGraph"}
@@ -94,10 +101,12 @@ class FakeRuntime:
         top_k: int = 6,
         history: list[dict] | None = None,
         context_games: list[dict] | None = None,
+        conversation_state: dict | None = None,
     ) -> dict:
         self.call_count += 1
         self.last_history = list(history or [])
         self.last_context_games = list(context_games or [])
+        self.last_conversation_state = dict(conversation_state or {})
         return {
             "mode": "research",
             "answer": f"{question} 답변",
@@ -120,6 +129,67 @@ class EmptyCompletionClient:
 
 
 class MultiAgentServiceTests(unittest.TestCase):
+    def test_intent_gate_keeps_single_game_sale_analysis_out_of_recommendation(self) -> None:
+        self.assertFalse(_is_broad_recommendation("Elden Ring은 지금 할인 중이야?"))
+        self.assertTrue(_is_broad_recommendation("현재 할인 중인 게임 5개 추천해줘"))
+
+    def test_recommendation_followup_merges_prior_hard_constraints(self) -> None:
+        prior = RecommendationQuery(
+            genres=["rpg"],
+            categories=["singleplayer"],
+            sale_required=True,
+            price_max_krw=40_000,
+        ).model_dump()
+
+        merged = _merge_recommendation_query(
+            prior,
+            RecommendationQuery(combat=["turn_based"]),
+            "그중 턴제만 골라줘",
+        )
+
+        self.assertEqual(merged.genres, ["rpg"])
+        self.assertEqual(merged.categories, ["singleplayer"])
+        self.assertEqual(merged.combat, ["turn_based"])
+        self.assertTrue(merged.sale_required)
+        self.assertEqual(merged.price_max_krw, 40_000)
+
+    def test_original_evidence_is_persisted_separately_from_ui_snippet(self) -> None:
+        content = "PEAK cooperative evidence " * 30
+        result = SearchResult(
+            Document(
+                content,
+                {
+                    "chunk_id": "peak-about-1",
+                    "appid": 3527290,
+                    "game_name": "PEAK",
+                    "section": "about",
+                },
+            ),
+            0.9,
+            rank=1,
+        )
+
+        source = _source_payload(result)
+        evidence = _evidence_payload(result)
+        citations = _claim_citations(
+            {
+                "claims": [
+                    {
+                        "claim_id": "game_profile",
+                        "text": "플레이 방식",
+                        "supported": True,
+                        "evidence_ranks": [1],
+                    }
+                ]
+            },
+            [evidence],
+        )
+
+        self.assertTrue(source["snippet"].endswith("…"))
+        self.assertEqual(evidence["content"], content)
+        self.assertEqual(evidence["source_id"], "peak-about-1")
+        self.assertEqual(citations[0]["source_ids"], ["peak-about-1"])
+
     def test_comparison_contract_detects_bare_vs_and_korean_connectors(self) -> None:
         self.assertEqual(_expected_game_count("PEAK vs R.E.P.O. 뭐가 더 좋아?"), 2)
         self.assertEqual(_expected_game_count("PEAK랑 R.E.P.O. 중 4명이 하기 좋은 게임은?"), 2)
@@ -329,6 +399,10 @@ class MultiAgentServiceTests(unittest.TestCase):
                     {"role": "assistant", "content": "PEAK 분석 답변"},
                 ],
                 "context_games": [{"appid": 3527290, "name": "PEAK"}],
+                "conversation_state": {
+                    "active_games": [{"appid": 3527290, "name": "PEAK"}],
+                    "last_mode": "research",
+                },
             },
         )
 
@@ -336,8 +410,8 @@ class MultiAgentServiceTests(unittest.TestCase):
         self.assertIn("SteamLens AI", page.text)
         self.assertNotIn('data-mode="analysis"', page.text)
         self.assertNotIn('class="main-nav"', page.text)
-        self.assertIn('/assets/app.js?v=35', page.text)
-        self.assertIn('/assets/app.css?v=35', page.text)
+        self.assertIn('/assets/app.js?v=36', page.text)
+        self.assertIn('/assets/app.css?v=36', page.text)
         self.assertNotIn("data-prompt=", page.text)
         self.assertNotIn("data-compose-prompt=", page.text)
         self.assertNotIn("추천 시작하기", page.text)
@@ -352,6 +426,10 @@ class MultiAgentServiceTests(unittest.TestCase):
         self.assertEqual(chat.json()["mode"], "research")
         self.assertEqual(runtime.last_history[0]["content"], "PEAK는 친구들과 하기 좋아?")
         self.assertEqual(runtime.last_context_games, [{"appid": 3527290, "name": "PEAK"}])
+        self.assertEqual(
+            runtime.last_conversation_state["active_games"],
+            [{"appid": 3527290, "name": "PEAK"}],
+        )
 
         javascript = client.get("/assets/app.js")
         stylesheet = client.get("/assets/app.css")
@@ -365,7 +443,7 @@ class MultiAgentServiceTests(unittest.TestCase):
         self.assertIn("const conversationRequests", javascript.text)
         self.assertNotIn("activeRequestController", javascript.text)
         self.assertIn("steamlens-conversations-v1", javascript.text)
-        self.assertIn("history, context_games, top_k", javascript.text)
+        self.assertIn("history, context_games, conversation_state, top_k", javascript.text)
         self.assertIn('conversation.view = "result"', javascript.text)
         self.assertIn('message.error ? " error"', javascript.text)
         self.assertIn("renderTurnArtifacts(message.data)", javascript.text)
@@ -539,11 +617,15 @@ class MultiAgentServiceTests(unittest.TestCase):
         )
 
         research.assert_called_once_with(
-            "PEAK의 최근 Steam 사용자 평가는 어떤가?",
+            "PEAK의 최근 Steam 사용자 평가는 어떤가?\n대상 Steam 게임: PEAK (appid: 3527290)",
             top_k=6,
+            target_games=[{"appid": 3527290, "name": "PEAK"}],
         )
         self.assertTrue(payload["conversation_context_used"])
-        self.assertEqual(payload["resolved_question"], "PEAK의 최근 Steam 사용자 평가는 어떤가?")
+        self.assertEqual(
+            payload["resolved_question"],
+            "PEAK의 최근 Steam 사용자 평가는 어떤가?\n대상 Steam 게임: PEAK (appid: 3527290)",
+        )
 
     def test_candidate_resolution_rejects_generic_and_non_game_results(self) -> None:
         class Client:

@@ -527,55 +527,115 @@ def adapt_similarity_spec_to_question(spec: SimilaritySpec, question: str) -> Si
     reference title happens to use real-time combat.
     """
 
-    if "서브컬처" not in _key(question).replace(" ", ""):
-        return spec
-    must = tuple(feature for feature in ("anime", "rpg") if feature in spec.seed_features)
-    if not must:
-        must = spec.must_have[:2]
-    concept_features = (
-        "character_focused",
-        "character_collection",
-        "open_world",
-        "real_time",
-        "action",
-        "third_person",
-        "3d",
-        "exploration",
-        "story_rich",
-        "free_to_play",
-        "live_service",
-    )
-    should = tuple(
-        dict.fromkeys(
-            feature
-            for feature in (*concept_features, *spec.should_have, *spec.must_have)
-            if feature not in must
-        )
-    )
-    excluded = tuple(
-        feature for feature in spec.excluded if feature not in {"turn_based"}
-    )
+    must = list(spec.must_have)
+    should = list(spec.should_have)
+    excluded = list(spec.excluded)
     weights = spec.weights
-    weights.update(
-        {
-            "anime": 4.5,
-            "rpg": 3.5,
-            "character_focused": 3.0,
-            "character_collection": 3.0,
-            "open_world": 4.0,
-            "real_time": 2.4,
-            "free_to_play": 3.5,
-            "live_service": 1.8,
-            "singleplayer": 0.7,
-            "co_op": 0.7,
-            "multiplayer": 0.7,
-        }
-    )
+    if "서브컬처" in _key(question).replace(" ", ""):
+        must = [feature for feature in ("anime", "rpg") if feature in spec.seed_features]
+        if not must:
+            must = list(spec.must_have[:2])
+        concept_features = (
+            "character_focused",
+            "character_collection",
+            "open_world",
+            "real_time",
+            "action",
+            "third_person",
+            "3d",
+            "exploration",
+            "story_rich",
+            "free_to_play",
+            "live_service",
+        )
+        should = list(
+            dict.fromkeys(
+                feature
+                for feature in (*concept_features, *spec.should_have, *spec.must_have)
+                if feature not in must
+            )
+        )
+        excluded = [feature for feature in spec.excluded if feature != "turn_based"]
+        weights.update(
+            {
+                "anime": 4.5,
+                "rpg": 3.5,
+                "character_focused": 3.0,
+                "character_collection": 3.0,
+                "open_world": 4.0,
+                "real_time": 2.4,
+                "free_to_play": 3.5,
+                "live_service": 1.8,
+                "singleplayer": 0.7,
+                "co_op": 0.7,
+                "multiplayer": 0.7,
+            }
+        )
+
+    # Follow-up turns are applied as a delta over the persisted seed contract.
+    # This prevents a short phrase such as "그중 협동만" from discarding the
+    # original game's genre/play-style requirements.
+    terms = {
+        "turn_based": r"턴제|turn[ -]?based",
+        "real_time": r"실시간|real[ -]?time",
+        "co_op": r"협동|코옵|co[ -]?op",
+        "multiplayer": r"멀티(?:플레이)?|multiplayer",
+        "singleplayer": r"싱글(?:플레이)?|single[ -]?player",
+        "story_rich": r"스토리|서사|story",
+        "open_world": r"오픈\s*월드|open[ -]?world",
+        "free_to_play": r"무료|free[ -]?to[ -]?play",
+        "survival": r"생존|서바이벌|survival",
+        "rpg": r"\brpg\b|롤플레잉",
+    }
+    lowered = question.casefold()
+    for feature, term in terms.items():
+        if not re.search(term, lowered, flags=re.IGNORECASE):
+            continue
+        negative = bool(
+            re.search(
+                rf"(?:{term}).{{0,12}}(?:빼고|제외|말고|싫|아닌|없(?:는|이))|"
+                rf"(?:빼고|제외|말고).{{0,12}}(?:{term})",
+                lowered,
+                flags=re.IGNORECASE,
+            )
+        )
+        neutral = bool(
+            re.search(rf"(?:{term}).{{0,10}}상관\s*없", lowered, flags=re.IGNORECASE)
+        )
+        required = bool(
+            re.search(
+                rf"(?:{term}).{{0,15}}(?:만|필수|원해|원하는|가능한|지원(?:하|해)|이어야)|"
+                rf"(?:반드시|꼭).{{0,12}}(?:{term})",
+                lowered,
+                flags=re.IGNORECASE,
+            )
+        )
+        must = [item for item in must if item != feature]
+        should = [item for item in should if item != feature]
+        excluded = [item for item in excluded if item != feature]
+        if neutral:
+            weights.pop(feature, None)
+        elif negative:
+            excluded.append(feature)
+        elif required:
+            must.append(feature)
+            weights[feature] = max(4.0, weights.get(feature, 0.0))
+        else:
+            should.append(feature)
+            weights[feature] = max(2.0, weights.get(feature, 0.0))
+
+    must = list(dict.fromkeys(must))
+    should = [feature for feature in dict.fromkeys(should) if feature not in must]
+    excluded = [
+        feature
+        for feature in dict.fromkeys(excluded)
+        if feature not in must and feature not in should
+    ]
     return SimilaritySpec(
         seed=spec.seed,
-        must_have=must,
-        should_have=should,
-        excluded=excluded,
+        must_have=tuple(must),
+        should_have=tuple(should),
+        excluded=tuple(excluded),
         feature_weights=tuple((feature, weights.get(feature, 1.0)) for feature in (*must, *should)),
         seed_features=spec.seed_features,
     )

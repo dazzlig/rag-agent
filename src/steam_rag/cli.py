@@ -20,6 +20,10 @@ from steam_rag.evaluation_tools.benchmark import (
     save_benchmark,
     save_conversation_benchmark,
 )
+from steam_rag.evaluation_tools.semantic_quality import (
+    DEFAULT_JUDGE_MODEL,
+    DEFAULT_RAGAS_MODEL,
+)
 from steam_rag.external_apis.openai_client import OpenAIAnswerGenerator, OpenAIEmbedder, load_env_file
 from steam_rag.game_analysis.time_aware import run_time_analysis_and_index
 from steam_rag.game_recommendation.candidate_service import DynamicRecommendationService
@@ -51,6 +55,34 @@ DEFAULT_CONVERSATION_GOLDEN = Path("data/eval/conversation_golden_set_v1.jsonl")
 DEFAULT_CONVERSATION_DETAILS = Path("data/eval/conversation_benchmark_details.jsonl")
 DEFAULT_CONVERSATION_SUMMARY = Path("data/eval/conversation_benchmark_summary.json")
 DEFAULT_CONVERSATION_MANIFEST = Path("data/eval/conversation_benchmark_manifest.json")
+
+
+def _merge_quality_run_summaries(
+    prepared_dir: Path,
+    current: dict[str, object],
+    *,
+    invoked_engines: list[str],
+) -> dict[str, object]:
+    """Keep both engine summaries when RAGAS and Judge are resumed separately."""
+
+    merged = dict(current)
+    for engine in ("ragas", "judge"):
+        if engine in merged:
+            continue
+        summary_path = prepared_dir / f"{engine}-summary.json"
+        if not summary_path.exists():
+            continue
+        try:
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(summary, dict):
+            merged[engine] = summary
+    merged["invoked_engines"] = list(invoked_engines)
+    merged["engines"] = [
+        engine for engine in ("ragas", "judge") if isinstance(merged.get(engine), dict)
+    ]
+    return merged
 
 
 def _file_sha256(path: Path) -> str:
@@ -239,6 +271,46 @@ def _parser() -> argparse.ArgumentParser:
         help="Validate the Golden Set schema without loading the service or calling external APIs",
     )
 
+    prepare_quality = subparsers.add_parser(
+        "prepare-quality-evaluation",
+        help="Create fixed RAGAS and LLM Judge inputs from a conversation details JSONL",
+    )
+    prepare_quality.add_argument("--details", type=Path, required=True)
+    prepare_quality.add_argument("--output-dir", type=Path, required=True)
+
+    evaluate_quality = subparsers.add_parser(
+        "evaluate-quality",
+        help="Run resumable RAGAS and/or LLM Judge evaluation on prepared inputs",
+    )
+    evaluate_quality.add_argument("--prepared-dir", type=Path, required=True)
+    evaluate_quality.add_argument(
+        "--engines",
+        nargs="+",
+        choices=("ragas", "judge"),
+        default=("ragas", "judge"),
+    )
+    evaluate_quality.add_argument("--ragas-model", default=DEFAULT_RAGAS_MODEL)
+    evaluate_quality.add_argument("--judge-model", default=DEFAULT_JUDGE_MODEL)
+    evaluate_quality.add_argument("--embedding-model", default="text-embedding-3-small")
+    evaluate_quality.add_argument(
+        "--ragas-limit",
+        type=int,
+        default=0,
+        help="Maximum new RAGAS rows in this invocation; 0 evaluates all pending rows",
+    )
+    evaluate_quality.add_argument(
+        "--judge-limit",
+        type=int,
+        default=0,
+        help="Maximum new LLM Judge calls in this invocation; 0 evaluates all pending rows",
+    )
+    evaluate_quality.add_argument(
+        "--resume",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Reuse completed rows from existing output JSONL files",
+    )
+
     collect = subparsers.add_parser(
         "collect",
         help="Collect one Steam game into combined Markdown and upsert the vector store",
@@ -331,7 +403,64 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
+    if args.command == "prepare-quality-evaluation":
+        from steam_rag.evaluation_tools.semantic_quality import prepare_semantic_evaluation
+
+        summary = prepare_semantic_evaluation(args.details, args.output_dir)
+        print(json.dumps(summary, ensure_ascii=False, indent=2))
+        return 0
+
     load_env_file(args.env_file)
+    if args.command == "evaluate-quality":
+        from steam_rag.evaluation_tools.semantic_quality import (
+            OpenAIQualityJudge,
+            OpenAIRagasEvaluator,
+            load_jsonl,
+            run_llm_judge,
+            run_ragas_evaluation,
+        )
+
+        prepared_dir = args.prepared_dir
+        invoked_engines = list(args.engines)
+        run_summary: dict[str, object] = {
+            "prepared_dir": str(prepared_dir),
+            "engines": invoked_engines,
+            "resume": bool(args.resume),
+        }
+        if "ragas" in args.engines:
+            ragas_rows = load_jsonl(prepared_dir / "ragas-input.jsonl")
+            run_summary["ragas"] = run_ragas_evaluation(
+                ragas_rows,
+                evaluator=OpenAIRagasEvaluator(args.ragas_model, args.embedding_model),
+                output_path=prepared_dir / "ragas-results.jsonl",
+                summary_path=prepared_dir / "ragas-summary.json",
+                limit=max(0, args.ragas_limit),
+                resume=bool(args.resume),
+            )
+        if "judge" in args.engines:
+            judge_rows = load_jsonl(prepared_dir / "judge-input.jsonl")
+            run_summary["judge"] = run_llm_judge(
+                judge_rows,
+                judge=OpenAIQualityJudge(args.judge_model),
+                output_path=prepared_dir / "judge-results.jsonl",
+                summary_path=prepared_dir / "judge-summary.json",
+                limit=max(0, args.judge_limit),
+                resume=bool(args.resume),
+            )
+        combined_path = prepared_dir / "quality-run-summary.json"
+        run_summary = _merge_quality_run_summaries(
+            prepared_dir,
+            run_summary,
+            invoked_engines=invoked_engines,
+        )
+        run_summary["summary_output"] = str(combined_path)
+        combined_path.write_text(
+            json.dumps(run_summary, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        print(json.dumps(run_summary, ensure_ascii=False, indent=2))
+        return 0
+
     if args.command == "sync-catalog":
         api_key = os.getenv("STEAM_WEB_API_KEY", "")
         apps = SteamAPIClient().fetch_catalog(api_key)

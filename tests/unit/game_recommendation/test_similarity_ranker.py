@@ -151,6 +151,22 @@ class SimilarityTests(unittest.TestCase):
         self.assertNotIn("turn_based", spec.excluded)
         self.assertIn("character_collection", spec.should_have)
 
+    def test_followup_delta_preserves_seed_contract_and_adds_new_constraints(self) -> None:
+        initial = adapt_similarity_spec_to_question(
+            build_similarity_spec(WUTHERING_WAVES),
+            "명조 같은 서브컬처 게임 추천해줘",
+        )
+
+        refined = adapt_similarity_spec_to_question(
+            initial,
+            "그중 협동 가능한 것만, 턴제는 빼고 골라줘",
+        )
+
+        self.assertIn("anime", refined.must_have)
+        self.assertIn("rpg", refined.must_have)
+        self.assertIn("co_op", refined.must_have)
+        self.assertIn("turn_based", refined.excluded)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -27,11 +27,22 @@ class ContextGame(BaseModel):
     name: str = Field(min_length=1, max_length=200)
 
 
+class ConversationState(BaseModel):
+    """Small client-owned state used to make the stateless API conversation-safe."""
+
+    active_games: list[ContextGame] = Field(default_factory=list, max_length=10)
+    last_mode: str = Field(default="", max_length=32)
+    last_resolved_question: str = Field(default="", max_length=1600)
+    recommendation_query: dict[str, Any] = Field(default_factory=dict)
+    similarity_spec: dict[str, Any] = Field(default_factory=dict)
+
+
 class ChatRequest(BaseModel):
     question: str = Field(min_length=1, max_length=1200)
     top_k: int = Field(default=6, ge=1, le=10)
     history: list[ChatMessage] = Field(default_factory=list, max_length=12)
     context_games: list[ContextGame] = Field(default_factory=list, max_length=10)
+    conversation_state: ConversationState = Field(default_factory=ConversationState)
     request_id: str | None = Field(default=None, min_length=8, max_length=80, pattern=r"^[a-zA-Z0-9_-]+$")
 
 
@@ -48,6 +59,7 @@ def create_service_app(runtime: SteamServiceRuntime | None = None) -> FastAPI:
             top_k=request.top_k,
             history=[message.model_dump() for message in request.history],
             context_games=[game.model_dump() for game in request.context_games],
+            conversation_state=request.conversation_state.model_dump(),
         )
 
     async def execute_cached_chat(request: ChatRequest) -> dict[str, Any]:

@@ -231,6 +231,8 @@ function compactResponse(data) {
     evidence_coverage: data.evidence_coverage || {},
     resolved_question: data.resolved_question || "",
     conversation_context_used: Boolean(data.conversation_context_used),
+    intent_route: data.intent_route || data.mode || "",
+    conversation_state: data.conversation_state || {},
   };
 }
 
@@ -248,6 +250,7 @@ function createConversation(mode = activeMode) {
     view: "landing",
     error: "",
     draft: "",
+    state: {},
     updatedAt: Date.now(),
   };
   conversations.unshift(conversation);
@@ -353,7 +356,13 @@ async function submitQuestion(question) {
   const latestGameTurn = [...conversation.messages]
     .reverse()
     .find((message) => message.role === "assistant" && message.data?.games?.length);
-  const context_games = [...new Map((latestGameTurn?.data?.games || [])
+  const conversation_state = conversation.state
+    || conversation.data?.conversation_state
+    || {};
+  const stateGames = Array.isArray(conversation_state.active_games)
+    ? conversation_state.active_games
+    : [];
+  const context_games = [...new Map((stateGames.length ? stateGames : (latestGameTurn?.data?.games || []))
     .filter((game) => game?.appid && game?.name)
     .map((game) => [Number(game.appid), {appid: Number(game.appid), name: String(game.name)}]))
     .values()].slice(0, 10);
@@ -369,7 +378,7 @@ async function submitQuestion(question) {
   persistConversations(); loadHistory(); beginLoading(conversation);
   try {
     const response = await postChat(
-      {question, history, context_games, top_k: 6, request_id: clientRequestId},
+      {question, history, context_games, conversation_state, top_k: 6, request_id: clientRequestId},
       requestController.signal,
     );
     const data = await response.json();
@@ -382,6 +391,7 @@ async function submitQuestion(question) {
       data: storedData,
     });
     conversation.data = storedData;
+    conversation.state = storedData.conversation_state || conversation.state || {};
     conversation.view = "result";
     conversation.updatedAt = Date.now();
     persistConversations(); loadHistory();

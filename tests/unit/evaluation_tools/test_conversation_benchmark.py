@@ -28,6 +28,7 @@ class FakeConversationRuntime:
         top_k: int = 6,
         history: list[dict[str, str]] | None = None,
         context_games: list[dict[str, Any]] | None = None,
+        conversation_state: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         self.calls.append(
             {
@@ -35,6 +36,7 @@ class FakeConversationRuntime:
                 "top_k": top_k,
                 "history": list(history or []),
                 "context_games": list(context_games or []),
+                "conversation_state": dict(conversation_state or {}),
             }
         )
         if self.fail_on_call == len(self.calls):
@@ -50,6 +52,11 @@ class FakeConversationRuntime:
                 },
                 "conversation_context_used": False,
                 "followup_relation": "standalone",
+                "conversation_state": {
+                    "active_games": [{"appid": 10, "name": "Example Co-op"}],
+                    "last_mode": "recommendation",
+                    "recommendation_query": {"categories": ["co_op"]},
+                },
             }
         return {
             "mode": "research",
@@ -140,6 +147,10 @@ class ConversationBenchmarkTests(unittest.TestCase):
         )
         self.assertEqual(
             runtime.calls[1]["context_games"],
+            [{"appid": 10, "name": "Example Co-op"}],
+        )
+        self.assertEqual(
+            runtime.calls[1]["conversation_state"]["active_games"],
             [{"appid": 10, "name": "Example Co-op"}],
         )
         self.assertEqual(records[0].observed_appids, [10])

@@ -18,6 +18,7 @@ PRICING_VERSION = "2026-07-14-official-defaults"
 # explicit so an evaluation report remains reproducible. Override the complete
 # table with STEAM_RAG_PRICING_JSON when a model or price changes.
 DEFAULT_MODEL_PRICING: dict[str, dict[str, float]] = {
+    "gpt-4o-mini": {"input": 0.15, "cached_input": 0.075, "output": 0.60},
     "gpt-5-mini": {"input": 0.25, "cached_input": 0.025, "output": 2.00},
     "text-embedding-3-small": {
         "input": 0.02,
