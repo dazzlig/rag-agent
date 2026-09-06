@@ -1,0 +1,88 @@
+{
+  "appid": 1086940,
+  "game_key": "baldurs_gate_3",
+  "name": "Baldur's Gate 3",
+  "aliases": ["발더스 게이트 3", "발게 3", "발게3", "BG3", "Baldurs Gate 3"],
+  "platforms": ["steam"],
+  "editions": ["Baldur's Gate 3", "Digital Deluxe Edition"],
+  "question_type": "서사 중심 진행",
+  "tools": ["search_game_knowledge", "get_game_facts", "get_user_game_state"],
+  "key_systems": [
+    {
+      "system_id": "turn_based_combat",
+      "name": "턴제 전투",
+      "summary": "D&D 5판 규칙을 바탕으로 한 턴제 전투다. 행동, 보너스 행동, 이동이 턴마다 나뉜다.",
+      "source": "steam_store_description",
+      "verified_at": ""
+    },
+    {
+      "system_id": "party",
+      "name": "파티와 동료",
+      "summary": "동료를 모아 파티를 구성하고 캠프에서 구성원을 교체한다.",
+      "source": "steam_store_description",
+      "verified_at": ""
+    },
+    {
+      "system_id": "choices",
+      "name": "선택과 결과",
+      "summary": "대화와 주사위 판정 결과가 이후 전개와 동료 관계에 영향을 준다.",
+      "source": "steam_store_description",
+      "verified_at": ""
+    },
+    {
+      "system_id": "rest",
+      "name": "휴식과 자원 회복",
+      "summary": "긴 휴식으로 주문 슬롯과 능력 사용 횟수를 회복하며, 캠프 이벤트도 이때 진행된다.",
+      "source": "steam_store_description",
+      "verified_at": ""
+    }
+  ],
+  "milestones": [
+    {
+      "order": 1,
+      "milestone_id": "act1",
+      "label": "1막",
+      "keywords": ["1막", "act 1", "act1", "초반", "난파", "해변", "고블린 캠프"],
+      "story_sensitive": false
+    },
+    {
+      "order": 2,
+      "milestone_id": "act2",
+      "label": "2막",
+      "keywords": ["2막", "act 2", "act2", "그림자 저주받은 땅", "shadow-cursed"],
+      "story_sensitive": true
+    },
+    {
+      "order": 3,
+      "milestone_id": "act3",
+      "label": "3막",
+      "keywords": ["3막", "act 3", "act3", "발더스 게이트 도시", "하부 도시"],
+      "story_sensitive": true
+    },
+    {
+      "order": 4,
+      "milestone_id": "ending",
+      "label": "결말",
+      "keywords": ["결말", "엔딩", "ending", "최종 선택", "최종 보스"],
+      "story_sensitive": true
+    }
+  ],
+  "knowledge_sources": [
+    {
+      "title": "Steam 상품 페이지와 공식 설명",
+      "url": "https://store.steampowered.com/app/1086940/",
+      "usage": "steam_official",
+      "version": "",
+      "collected_at": "",
+      "spoiler_labeled": true
+    }
+  ],
+  "support": {
+    "topics": ["system", "early_guide", "build"],
+    "sections": ["1막"],
+    "verified_version": "",
+    "verified_platforms": ["steam"],
+    "last_reviewed": "",
+    "out_of_scope_note": "지원 범위와 버전은 개발자가 직접 검증한 뒤 채운다. 값이 비어 있으면 답변에서 '버전 미확인'으로 표시한다."
+  }
+}

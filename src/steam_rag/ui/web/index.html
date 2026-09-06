@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Steam 데이터와 멀티 에이전트 RAG를 활용한 게임 추천·분석 서비스">
+  <meta name="description" content="Steam 데이터와 멀티 에이전트 RAG를 활용한 게임 추천·분석·공략 서비스">
   <title>SteamLens AI</title>
-  <link rel="stylesheet" href="/assets/app.css?v=36">
+  <link rel="stylesheet" href="/assets/app.css?v=37">
 </head>
 <body>
   <header class="topbar">
@@ -18,8 +18,15 @@
 
   <div class="page-shell">
     <aside class="side-nav">
+      <nav class="space-nav" aria-label="공간 이동">
+        <button type="button" data-space="discovery" class="active">게임 찾기</button>
+        <button type="button" data-space="compare">비교</button>
+        <button type="button" data-space="library">내 게임</button>
+        <button type="button" data-space="taste">내 취향</button>
+      </nav>
+
       <button id="newConversation" class="new-conversation" type="button"><span>＋</span> 새 대화</button>
-      <div class="side-title history-title">대화 목록</div>
+      <div class="side-title history-title">탐색 대화</div>
       <div id="history" class="history"></div>
 
       <div class="system-card">
@@ -36,7 +43,6 @@
       </section>
 
       <section id="landing" class="chat-empty-state">
-        
         <h2>Steam 게임에 대해 무엇이든 물어보세요</h2>
         <p>게임 추천, 플레이 방식, 최근 평가와 업데이트 변화를 근거와 함께 확인합니다.</p>
       </section>
@@ -73,6 +79,10 @@
             <div><span>근거 충족도</span><b id="coverageValue">0%</b></div>
             <div class="coverage-track"><span id="coverageBar"></span></div>
           </div>
+          <div id="budgetCard" class="coverage-card hidden">
+            <div><span>이번 요청 호출</span><b id="budgetValue">0</b></div>
+            <small id="budgetDetail"></small>
+          </div>
         </aside>
       </section>
 
@@ -80,7 +90,76 @@
         <span>!</span><div><h2>요청을 처리하지 못했습니다</h2><p id="errorMessage"></p></div>
       </section>
 
-      <div class="composer-shell">
+      <section id="compareSpace" class="space-panel hidden">
+        <div class="space-head">
+          <div><h2>비교</h2><p>탐색에서 고른 게임을 같은 기준으로 비교합니다. 근거가 없는 축은 미확인으로 둡니다.</p></div>
+          <button id="runCompare" class="primary-button" type="button">선택한 게임 비교</button>
+        </div>
+        <div id="compareBasket" class="compare-basket"></div>
+        <div id="compareResult" class="compare-result"></div>
+      </section>
+
+      <section id="librarySpace" class="space-panel hidden">
+        <div class="space-head">
+          <div><h2>내 게임</h2><p>저장한 게임과 진행 상태입니다. 게임을 열면 그 게임 전용 공략 공간으로 이동합니다.</p></div>
+        </div>
+        <div id="libraryList" class="library-grid"></div>
+      </section>
+
+      <section id="tasteSpace" class="space-panel hidden">
+        <div class="space-head">
+          <div><h2>내 취향</h2><p>직접 좋아한다고 말한 요소와 싫다고 말한 요소만 저장합니다. 언제든 지울 수 있습니다.</p></div>
+        </div>
+        <form id="preferenceForm" class="preference-form">
+          <select id="preferenceKind" aria-label="취향 종류">
+            <option value="like">좋아함</option>
+            <option value="dislike">싫어함</option>
+            <option value="played">해본 게임</option>
+            <option value="avoid">피하고 싶음</option>
+          </select>
+          <input id="preferenceValue" maxlength="120" placeholder="예: 턴제 전투" aria-label="취향 값">
+          <input id="preferenceEvidence" maxlength="400" placeholder="이렇게 말한 이유(근거)" aria-label="근거">
+          <button class="primary-button" type="submit">저장</button>
+        </form>
+        <div id="preferenceList" class="preference-list"></div>
+      </section>
+
+      <section id="playSpace" class="space-panel hidden">
+        <div class="play-head">
+          <img id="playImage" alt="" src="" loading="lazy">
+          <div>
+            <h2 id="playTitle">게임별 플레이 공간</h2>
+            <p id="playScope">지원 범위를 확인하는 중입니다.</p>
+          </div>
+          <button id="backToLibrary" class="ghost-button" type="button">내 게임으로</button>
+        </div>
+        <div class="play-body">
+          <div class="play-threads">
+            <div class="section-heading"><h3>주제별 공략 대화</h3><button id="newThread" class="ghost-button" type="button">＋ 주제 추가</button></div>
+            <div id="threadList" class="thread-list"></div>
+            <div class="section-heading"><h3>진행 상태</h3></div>
+            <form id="stateForm" class="state-form">
+              <label>진행 구간<input id="stateProgress" maxlength="300" placeholder="예: 그린패스"></label>
+              <label>빌드·직업<input id="stateBuild" maxlength="200" placeholder="예: 주문 위주"></label>
+              <label>장비<input id="stateEquipment" maxlength="300" placeholder="쉼표로 구분"></label>
+              <label>스포일러 허용
+                <select id="stateSpoiler">
+                  <option value="no_spoiler">스포일러 없이</option>
+                  <option value="progress">진행한 구간까지</option>
+                  <option value="all">전부 허용</option>
+                </select>
+              </label>
+              <button class="primary-button" type="submit">상태 저장</button>
+            </form>
+            <div id="attemptList" class="attempt-list"></div>
+          </div>
+          <div class="play-conversation">
+            <div id="playMessages" class="conversation-messages"></div>
+          </div>
+        </div>
+      </section>
+
+      <div class="composer-shell" id="composer">
         <form id="searchForm" class="search-box">
           <textarea id="question" rows="1" maxlength="1200" placeholder="메시지를 입력하세요" aria-label="게임 질문"></textarea>
           <span class="shortcut">Ctrl K</span>
@@ -91,6 +170,6 @@
   </div>
 
   <footer><span>SteamLens AI Prototype</span><span>Steam 정보는 수집 시점 기준이며, 중요한 내용은 공식 스토어에서 다시 확인하세요.</span></footer>
-  <script src="/assets/app.js?v=36" defer></script>
+  <script src="/assets/app.js?v=37" defer></script>
 </body>
 </html>

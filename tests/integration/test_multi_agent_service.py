@@ -102,13 +102,23 @@ class FakeRuntime:
         history: list[dict] | None = None,
         context_games: list[dict] | None = None,
         conversation_state: dict | None = None,
+        workspace: str = "discovery",
+        user_id: str = "local",
+        session_id: str = "",
+        game_id: int | None = None,
+        thread_id: str = "",
+        playthrough: int = 1,
     ) -> dict:
         self.call_count += 1
         self.last_history = list(history or [])
         self.last_context_games = list(context_games or [])
         self.last_conversation_state = dict(conversation_state or {})
+        self.last_workspace = workspace
+        self.last_game_id = game_id
+        self.last_thread_id = thread_id
         return {
-            "mode": "research",
+            "mode": "play" if workspace == "play" and game_id else "research",
+            "workspace": workspace,
             "answer": f"{question} 답변",
             "query_variants": [question],
             "agents": [{"agent": "Answer Agent", "status": "completed", "detail": "sources=1"}],
@@ -410,8 +420,15 @@ class MultiAgentServiceTests(unittest.TestCase):
         self.assertIn("SteamLens AI", page.text)
         self.assertNotIn('data-mode="analysis"', page.text)
         self.assertNotIn('class="main-nav"', page.text)
-        self.assertIn('/assets/app.js?v=36', page.text)
-        self.assertIn('/assets/app.css?v=36', page.text)
+        self.assertIn('/assets/app.js?v=37', page.text)
+        self.assertIn('/assets/app.css?v=37', page.text)
+        # 기획안 4.5: 다섯 화면을 두되 상단 메뉴가 질문을 자동 실행하지 않는다.
+        self.assertIn('class="space-nav"', page.text)
+        for space in ("discovery", "compare", "library", "taste"):
+            self.assertIn(f'data-space="{space}"', page.text)
+        self.assertIn('id="playSpace"', page.text)
+        self.assertIn('id="stateForm"', page.text)
+        self.assertIn('id="preferenceForm"', page.text)
         self.assertNotIn("data-prompt=", page.text)
         self.assertNotIn("data-compose-prompt=", page.text)
         self.assertNotIn("추천 시작하기", page.text)
@@ -455,8 +472,15 @@ class MultiAgentServiceTests(unittest.TestCase):
         self.assertNotIn("undoHistoryDelete", javascript.text)
         self.assertNotIn("historyUndoToast", page.text)
         self.assertIn('$("#newConversation").addEventListener', javascript.text)
+        self.assertIn('workspace: "discovery"', javascript.text)
+        self.assertIn("async function submitPlayQuestion", javascript.text)
+        self.assertIn("renderCandidateDetail", javascript.text)
+        self.assertIn("잘 맞는 점", javascript.text)
+        self.assertIn("선택 전 확인", javascript.text)
+        self.assertIn("정보 상태", javascript.text)
         self.assertIn("--chat-width: 900px", stylesheet.text)
         self.assertIn(".hero { display: block", stylesheet.text)
+        self.assertIn(".compare-table", stylesheet.text)
 
     def test_duplicate_chat_request_id_reuses_cached_result(self) -> None:
         runtime = FakeRuntime()
@@ -549,9 +573,15 @@ class MultiAgentServiceTests(unittest.TestCase):
             [{"role": "user", "content": "명조 같은 게임 추천해줘"}],
             context_games=[],
         )
-        recommend.assert_called_once_with(question, excluded_appids={1621690, 108600})
+        self.assertEqual(recommend.call_count, 1)
+        call_kwargs = recommend.call_args.kwargs
+        self.assertEqual(recommend.call_args.args, (question,))
+        self.assertEqual(call_kwargs["excluded_appids"], {1621690, 108600})
+        self.assertEqual(call_kwargs["feedback"], {})
+        self.assertEqual(call_kwargs["budget"].expert_calls, 0)
         self.assertEqual(payload["followup_relation"], "correction")
         self.assertEqual(payload["excluded_appids"], [108600, 1621690])
+        self.assertEqual(payload["workspace"], "discovery")
 
     def test_followup_relation_preserves_normal_candidate_refinement(self) -> None:
         relation = _followup_relation(

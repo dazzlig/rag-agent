@@ -245,3 +245,87 @@ footer { display: flex; justify-content: space-between; padding: 20px 30px; bord
   .game-grid { grid-template-columns: 1fr; }
   footer { display: block; text-align: center; line-height: 1.8; }
 }
+
+/* 공간 이동과 새 화면 (기획안 4.5) */
+.space-nav { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 16px; }
+.space-nav button { border: 1px solid var(--line); border-radius: 9px; background: transparent; color: var(--muted); padding: 9px 8px; cursor: pointer; font-size: 12px; font-weight: 700; }
+.space-nav button:hover { color: var(--text); }
+.space-nav button.active { background: #101d30; color: var(--text); border-color: var(--accent, #3f7fd6); }
+
+.space-panel { width: min(100%, var(--chat-width)); margin: 0 auto; padding: 22px 0 40px; }
+.space-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+.space-head h2 { margin: 0 0 6px; font-size: 22px; letter-spacing: -.03em; }
+.space-head p { margin: 0; color: var(--muted); font-size: 13px; }
+.muted-text { color: var(--muted-2); font-size: 13px; }
+.primary-button { border: 1px solid var(--line); border-radius: 9px; background: #16294a; color: var(--text); padding: 9px 14px; cursor: pointer; font-size: 13px; font-weight: 700; }
+.primary-button:hover { background: #1c3358; }
+
+/* 후보 카드의 조건 판정 */
+.turn-game { border: 1px solid var(--line-soft); border-radius: 10px; padding: 10px 12px; background: #0d1a2b; }
+.condition-badge { display: inline-block; margin: 6px 0; padding: 3px 9px; border-radius: 999px; font-size: 11px; font-weight: 700; }
+.badge-ok { background: rgba(64, 160, 110, .18); color: #7fdcae; }
+.badge-warn { background: rgba(200, 150, 60, .18); color: #f0c479; }
+.badge-bad { background: rgba(200, 80, 80, .18); color: #f0908f; }
+.card-block { margin-top: 8px; font-size: 12px; }
+.card-block b { display: block; margin-bottom: 3px; color: var(--text); font-size: 11px; letter-spacing: .04em; }
+.card-block ul { margin: 0; padding-left: 16px; color: var(--muted); }
+.card-block small { display: block; color: var(--muted-2); line-height: 1.5; }
+.card-block.warn ul { color: #f0c479; }
+.card-block.muted { border-top: 1px solid var(--line-soft); padding-top: 6px; }
+.card-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+
+/* 비교 */
+.compare-basket { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+.basket-chip { display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px; font-size: 12px; }
+.basket-chip button { border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 14px; }
+.compare-table-wrap { overflow-x: auto; }
+.compare-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.compare-table th, .compare-table td { border: 1px solid var(--line-soft); padding: 9px 11px; text-align: left; vertical-align: top; }
+.compare-table thead th { background: #101d30; font-size: 12px; }
+.compare-table tbody th { color: var(--muted); font-weight: 700; white-space: nowrap; }
+.compare-table td.unverified { color: var(--muted-2); font-style: italic; }
+.axis-differs td { background: rgba(63, 127, 214, .09); }
+
+/* 내 게임 */
+.library-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+.library-card { border: 1px solid var(--line-soft); border-radius: 12px; overflow: hidden; background: #0d1a2b; }
+.library-card img { width: 100%; display: block; aspect-ratio: 460 / 215; object-fit: cover; }
+.library-card > div { padding: 12px; }
+.library-card h4 { margin: 0 0 5px; font-size: 15px; }
+.library-card small { color: var(--muted-2); font-size: 12px; }
+
+/* 내 취향 */
+.preference-form { display: grid; grid-template-columns: 120px 1fr 1.4fr auto; gap: 8px; margin-bottom: 18px; }
+.preference-form input, .preference-form select { border: 1px solid var(--line); border-radius: 9px; background: #0d1a2b; color: var(--text); padding: 9px 11px; font-size: 13px; }
+.preference-list { display: flex; flex-direction: column; gap: 8px; }
+.preference-row { display: flex; align-items: center; gap: 12px; border: 1px solid var(--line-soft); border-radius: 10px; padding: 10px 12px; }
+.preference-row div { flex: 1; }
+.preference-row small { display: block; color: var(--muted-2); font-size: 11px; margin-top: 3px; }
+.preference-kind { padding: 3px 9px; border-radius: 999px; font-size: 11px; font-weight: 700; background: #16294a; }
+.preference-kind.dislike, .preference-kind.avoid { background: rgba(200, 80, 80, .18); color: #f0908f; }
+
+/* 게임별 플레이 공간 */
+.play-head { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; }
+.play-head img { width: 132px; border-radius: 9px; }
+.play-head h2 { margin: 0 0 4px; font-size: 20px; }
+.play-head p { margin: 0; color: var(--muted); font-size: 12px; }
+.play-head button { margin-left: auto; }
+.play-body { display: grid; grid-template-columns: 300px 1fr; gap: 20px; align-items: start; }
+.thread-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
+.thread-row { border: 1px solid var(--line-soft); border-radius: 9px; background: transparent; color: var(--muted); text-align: left; padding: 9px 11px; cursor: pointer; }
+.thread-row.active { background: #101d30; color: var(--text); }
+.thread-row small { display: block; color: var(--muted-2); font-size: 11px; margin-top: 2px; }
+.state-form { display: flex; flex-direction: column; gap: 8px; }
+.state-form label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--muted-2); }
+.state-form input, .state-form select { border: 1px solid var(--line); border-radius: 8px; background: #0d1a2b; color: var(--text); padding: 8px 10px; font-size: 12px; }
+.attempt-list { margin-top: 14px; }
+.attempt-row { border-left: 2px solid var(--line); padding: 4px 0 4px 9px; margin-bottom: 6px; font-size: 12px; }
+.attempt-row small { display: block; color: var(--muted-2); font-size: 11px; }
+
+@media (max-width: 900px) {
+  .play-body { grid-template-columns: 1fr; }
+  .preference-form { grid-template-columns: 1fr; }
+}
+
+/* 사이드바를 고정해 공간 이동 버튼이 스크롤에 가려지지 않게 한다. */
+.side-nav { position: sticky; top: 64px; align-self: start; }

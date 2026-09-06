@@ -31,3 +31,6 @@ data/eval/runs/
 data/eval/week5_*
 data/eval/week6_*
 data/eval/week8_*
+
+# 사용자별 탐색/공략 대화와 게임 상태 저장소
+data/steam_workspace.db

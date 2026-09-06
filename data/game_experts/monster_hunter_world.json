@@ -1,0 +1,88 @@
+{
+  "appid": 582010,
+  "game_key": "monster_hunter_world",
+  "name": "Monster Hunter: World",
+  "aliases": ["몬스터 헌터 월드", "몬헌 월드", "몬헌월드", "MHW", "Monster Hunter World"],
+  "platforms": ["steam"],
+  "editions": ["Monster Hunter: World", "Iceborne"],
+  "question_type": "장비와 성장 시스템",
+  "tools": ["search_game_knowledge", "get_game_facts", "get_user_game_state"],
+  "key_systems": [
+    {
+      "system_id": "weapon_types",
+      "name": "무기 종류",
+      "summary": "14종 무기마다 조작과 콤보가 다르며, 무기를 바꾸면 공략 방식도 달라진다.",
+      "source": "steam_store_description",
+      "verified_at": ""
+    },
+    {
+      "system_id": "gear_crafting",
+      "name": "장비 제작과 강화",
+      "summary": "몬스터 소재로 무기와 방어구를 만들고 강화한다. 성장의 축이 레벨이 아니라 장비다.",
+      "source": "steam_store_description",
+      "verified_at": ""
+    },
+    {
+      "system_id": "elements",
+      "name": "속성과 상태 이상",
+      "summary": "몬스터마다 약한 속성과 상태 이상이 다르고, 장비 선택이 사냥 난도를 바꾼다.",
+      "source": "steam_store_description",
+      "verified_at": ""
+    },
+    {
+      "system_id": "hunt_flow",
+      "name": "사냥 준비와 진행",
+      "summary": "조사 준비, 아이템 보급, 캠프 활용으로 한 번의 사냥을 관리한다.",
+      "source": "steam_store_description",
+      "verified_at": ""
+    }
+  ],
+  "milestones": [
+    {
+      "order": 1,
+      "milestone_id": "low_rank",
+      "label": "하급(Low Rank)",
+      "keywords": ["하급", "low rank", "lr", "초반", "고대수림", "아스테라"],
+      "story_sensitive": false
+    },
+    {
+      "order": 2,
+      "milestone_id": "high_rank",
+      "label": "상급(High Rank)",
+      "keywords": ["상급", "high rank", "hr"],
+      "story_sensitive": false
+    },
+    {
+      "order": 3,
+      "milestone_id": "iceborne",
+      "label": "아이스본 마스터 랭크",
+      "keywords": ["아이스본", "iceborne", "마스터 랭크", "master rank", "mr", "세리에나"],
+      "story_sensitive": true
+    },
+    {
+      "order": 4,
+      "milestone_id": "endgame",
+      "label": "엔드 콘텐츠",
+      "keywords": ["엔드", "endgame", "역전왕", "특수 개체", "가이라"],
+      "story_sensitive": true
+    }
+  ],
+  "knowledge_sources": [
+    {
+      "title": "Steam 상품 페이지와 공식 설명",
+      "url": "https://store.steampowered.com/app/582010/",
+      "usage": "steam_official",
+      "version": "",
+      "collected_at": "",
+      "spoiler_labeled": true
+    }
+  ],
+  "support": {
+    "topics": ["system", "early_guide", "build", "progression"],
+    "sections": ["하급(Low Rank)"],
+    "verified_version": "",
+    "verified_platforms": ["steam"],
+    "last_reviewed": "",
+    "out_of_scope_note": "지원 범위와 버전은 개발자가 직접 검증한 뒤 채운다. 값이 비어 있으면 답변에서 '버전 미확인'으로 표시한다."
+  }
+}

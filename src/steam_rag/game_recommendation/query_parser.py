@@ -13,6 +13,11 @@ from pydantic import BaseModel, Field
 
 from steam_rag.common.telemetry import tracked_openai_call
 from steam_rag.game_metadata.playstyle import TAG_ALIASES, extract_query_facets, normalize_steam_tags
+from steam_rag.game_recommendation.constraints import (
+    CandidateConstraintReport,
+    evaluate_candidate_conditions,
+    summarize_constraint_gate,
+)
 
 
 FACET_SELECTOR_TAGS = {
@@ -117,6 +122,36 @@ def _normalized_values(values: Iterable[str]) -> list[str]:
     )
 
 
+#: "턴제보다는", "턴제 말고", "반복 플레이는 싫어"처럼 사용자가 명시적으로 배제한 표현.
+#: 기획안 4.1: 사용자가 명시적으로 제외한 조건은 분위기가 비슷하더라도 통과시키지 않는다.
+NEGATED_PREFERENCE = re.compile(
+    r"(?:^|[\s.,!?])((?:[가-힣A-Za-z0-9]+\s)?[가-힣A-Za-z0-9]{2,14})\s*"
+    r"(?:보다는|보단|말고|말구|은\s*싫|는\s*싫|이\s*아니|가\s*아니|은\s*별로|는\s*별로|제외|빼고)"
+)
+
+#: 기획안 4.1: "액션"만으로 실시간 전투를 확정하지 않는다. 직접 조작은 사용자가
+#: 그렇게 말했을 때만 조건으로 삼는다.
+DIRECT_CONTROL_PHRASE = re.compile(
+    r"직접\s*(?:움직|조작|공격|플레이|컨트롤)|손맛|조작\s*(?:감|중심)|액션\s*조작"
+)
+
+
+def _negated_conditions(question: str) -> tuple[dict[str, set[str]], set[str]]:
+    """Return the facets and tags the user explicitly ruled out."""
+
+    facets: dict[str, set[str]] = {}
+    tags: set[str] = set()
+    for match in NEGATED_PREFERENCE.finditer(question):
+        phrase = match.group(1).strip()
+        if not phrase:
+            continue
+        for field, values in extract_query_facets(phrase).items():
+            if values:
+                facets.setdefault(field, set()).update(values)
+        tags.update(normalize_steam_tags([phrase]))
+    return facets, tags
+
+
 def parse_recommendation_query(question: str) -> RecommendationQuery:
     """Deterministic Korean/English fallback parser used when an LLM is unavailable."""
 
@@ -160,14 +195,28 @@ def parse_recommendation_query(question: str) -> RecommendationQuery:
     elif won_match:
         price_max = int(won_match.group(1).replace(",", ""))
 
-    excluded: list[str] = []
+    negated_facets, negated_tags = _negated_conditions(question)
+    excluded: list[str] = sorted(negated_tags)
     for pattern in (r"([^,]+?)\s*(?:제외|빼고)", r"([^,]+?)은\s*싫"):
         for match in re.finditer(pattern, question):
             excluded.extend(normalize_steam_tags([match.group(1).strip()]))
 
+    def positive(field: str) -> list[str]:
+        """Drop facets the user explicitly ruled out in the same sentence."""
+
+        return [
+            value
+            for value in facets.get(field, [])
+            if value not in negated_facets.get(field, set())
+        ]
+
+    combat = positive("combat_facets")
+    if DIRECT_CONTROL_PHRASE.search(question) and "direct_control" not in combat:
+        combat.append("direct_control")
+
     facet_backed_tags = {
         canonical
-        for canonical in matched_tags
+        for canonical in matched_tags - negated_tags
         if canonical
         not in set(genres)
         | {"singleplayer", "multiplayer", "co_op"}
@@ -177,10 +226,10 @@ def parse_recommendation_query(question: str) -> RecommendationQuery:
         genres=genres,
         categories=categories,
         required_tags=sorted(facet_backed_tags),
-        combat=facets.get("combat_facets", []),
-        perspective=facets.get("perspective_facets", []),
-        dimension=facets.get("dimension_facets", []),
-        playstyle=facets.get("playstyle_facets", []),
+        combat=combat,
+        perspective=positive("perspective_facets"),
+        dimension=positive("dimension_facets"),
+        playstyle=positive("playstyle_facets"),
         recent_rating_required=bool(re.search(r"최근.*(?:평가|리뷰)|평가.*(?:좋|개선|상승)", question)),
         after_update_required=bool(re.search(r"(?:업데이트|패치).*(?:이후|후)|(?:이후|후).*(?:평가|리뷰)", question)),
         sale_required=bool(re.search(r"현재.*(?:세일|할인)|(?:세일|할인)\s*중", question)),
@@ -282,7 +331,14 @@ class CandidateScore:
     matched_tags: list[str] = field(default_factory=list)
     matched_facets: list[str] = field(default_factory=list)
     deferred_checks: list[str] = field(default_factory=list)
+    constraints: CandidateConstraintReport | None = None
     profile: dict[str, Any] = field(default_factory=dict, repr=False)
+
+    @property
+    def fully_verified(self) -> bool:
+        """True only when every required condition is confirmed satisfied (§7)."""
+
+        return self.constraints is None or self.constraints.fully_verified
 
     def to_dict(self, *, include_profile: bool = False) -> dict[str, Any]:
         value = {
@@ -290,6 +346,10 @@ class CandidateScore:
             "name": self.name,
             "score": round(self.score, 6),
             "profile_path": self.profile_path,
+            "condition_status": (
+                self.constraints.status if self.constraints is not None else "satisfied"
+            ),
+            "conditions": self.constraints.to_dict() if self.constraints is not None else {},
             "score_breakdown": {
                 "official_match": round(self.official_match_score, 6),
                 "tag_combination": round(self.tag_combination_score, 6),
@@ -315,6 +375,15 @@ class RecommendationSelection:
     hard_filter_matches: int
     candidates: list[CandidateScore]
     detail_targets: list[CandidateScore]
+    rejected: list[CandidateConstraintReport] = field(default_factory=list)
+
+    @property
+    def verified_candidates(self) -> list[CandidateScore]:
+        return [item for item in self.candidates if item.fully_verified]
+
+    @property
+    def unverified_candidates(self) -> list[CandidateScore]:
+        return [item for item in self.candidates if not item.fully_verified]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -322,8 +391,14 @@ class RecommendationSelection:
             "structured_query": self.query.model_dump(),
             "scanned_profiles": self.scanned_profiles,
             "hard_filter_matches": self.hard_filter_matches,
+            "verified_matches": len(self.verified_candidates),
+            "unverified_matches": len(self.unverified_candidates),
             "candidates": [candidate.to_dict() for candidate in self.candidates],
             "detail_targets": [candidate.to_dict() for candidate in self.detail_targets],
+            "constraint_gate": summarize_constraint_gate(
+                [item.constraints for item in self.candidates if item.constraints is not None]
+                + list(self.rejected)
+            ),
         }
 
 
@@ -357,6 +432,7 @@ class RecommendationProfileIndex:
     ) -> RecommendationSelection:
         normalized = query.normalized()
         ranked: list[CandidateScore] = []
+        rejected: list[CandidateConstraintReport] = []
         for path, profile in self.profiles:
             try:
                 profile_appid = int(profile.get("appid"))
@@ -364,10 +440,25 @@ class RecommendationProfileIndex:
                 continue
             if allowed_appids is not None and profile_appid not in allowed_appids:
                 continue
-            if not self._passes_hard_filters(profile, normalized):
+            if not self._is_recommendable_product(profile):
                 continue
-            ranked.append(self._score(path, profile, normalized))
-        ranked.sort(key=lambda item: (-item.score, item.name.casefold(), item.appid))
+            report = evaluate_candidate_conditions(profile, normalized)
+            if not report.passes:
+                # 위반이 확인된 후보만 제거한다. 미확인은 남겨 두고 표시한다(§7).
+                rejected.append(report)
+                continue
+            candidate = self._score(path, profile, normalized)
+            candidate.constraints = report
+            ranked.append(candidate)
+        # 확인된 후보를 먼저 보여주고, 미확인 후보는 그 뒤에 "확인할 점"과 함께 둔다.
+        ranked.sort(
+            key=lambda item: (
+                0 if item.fully_verified else 1,
+                -item.score,
+                item.name.casefold(),
+                item.appid,
+            )
+        )
         candidates = ranked[: max(0, candidate_limit)]
         detail_targets = candidates[: max(0, detail_limit)]
         return RecommendationSelection(
@@ -377,65 +468,21 @@ class RecommendationProfileIndex:
             hard_filter_matches=len(ranked),
             candidates=candidates,
             detail_targets=detail_targets,
+            rejected=rejected,
         )
 
-    def _passes_hard_filters(self, profile: dict[str, Any], query: RecommendationQuery) -> bool:
+    @staticmethod
+    def _is_recommendable_product(profile: dict[str, Any]) -> bool:
+        """Filter non-games and placeholder rows before condition judgement."""
+
         if str(profile.get("app_type") or "game").casefold() != "game":
             return False
-        if re.sub(r"[^a-z0-9가-힣]+", "", str(profile.get("name") or "").casefold()) in {
-            "game", "games", "steam", "게임",
-        }:
-            return False
-        requirements = {
-            "genres": set(query.genres),
-            "categories": set(query.categories),
-            "tags": set(query.required_tags),
-            "combat_facets": set(query.combat),
-            "perspective_facets": set(query.perspective),
-            "dimension_facets": set(query.dimension),
-            "playstyle_facets": set(query.playstyle),
+        return re.sub(r"[^a-z0-9가-힣]+", "", str(profile.get("name") or "").casefold()) not in {
+            "game",
+            "games",
+            "steam",
+            "게임",
         }
-        available = {
-            "genres": set(_strings(profile.get("steam_genres_normalized"))),
-            "categories": set(_strings(profile.get("steam_categories_normalized"))),
-            "tags": set(_profile_tags(profile)),
-            "combat_facets": set(_strings(profile.get("combat_facets"))),
-            "perspective_facets": set(_strings(profile.get("perspective_facets"))),
-            "dimension_facets": set(_strings(profile.get("dimension_facets"))),
-            "playstyle_facets": set(_strings(profile.get("playstyle_facets"))),
-        }
-        available["genres"].update(available["tags"])
-        available["categories"].update(available["tags"])
-        if any(wanted and not wanted.issubset(available[field]) for field, wanted in requirements.items()):
-            return False
-        searchable = set(_strings(profile.get("searchable_terms"))) | set().union(*available.values())
-        if set(query.excluded_conditions) & searchable:
-            return False
-        if query.price_max_krw is not None:
-            price = profile.get("price") or {}
-            final_price = price.get("final") if isinstance(price, dict) else None
-            currency = price.get("currency") if isinstance(price, dict) else None
-            if currency != "KRW" or not isinstance(final_price, (int, float)):
-                return False
-            if final_price > query.price_max_krw * 100:
-                return False
-        if query.sale_required:
-            price = profile.get("price") or {}
-            if (
-                not isinstance(price, dict)
-                or price.get("is_free") is True
-                or int(price.get("discount_percent") or 0) <= 0
-            ):
-                return False
-        if query.upcoming_required and profile.get("release_coming_soon") is not True:
-            return False
-        if (
-            query.currently_playable_required
-            and not query.upcoming_required
-            and profile.get("release_coming_soon") is True
-        ):
-            return False
-        return True
 
     def _score(self, path: Path, profile: dict[str, Any], query: RecommendationQuery) -> CandidateScore:
         profile_tags = set(_profile_tags(profile))
