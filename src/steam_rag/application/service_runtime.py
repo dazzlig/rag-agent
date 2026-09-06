@@ -15,7 +15,23 @@ from steam_rag.agents.multi_agent_workflow import QueryExpansionAgent
 from steam_rag.application.rag_pipeline import RAGPipeline
 from steam_rag.common.telemetry import telemetry_session
 from steam_rag.external_apis.openai_client import OpenAIAnswerGenerator, OpenAIEmbedder, load_env_file
+from steam_rag.game_expert.expert import GameExpertAgent
+from steam_rag.game_expert.support_scope import (
+    GameExpertProfile,
+    GameExpertRegistry,
+    SupportScope,
+    classify_topic,
+)
 from steam_rag.game_recommendation.candidate_service import DynamicRecommendationService
+from steam_rag.game_recommendation.comparison import comparison_markdown
+from steam_rag.game_recommendation.constraints import UNVERIFIED
+from steam_rag.tools.game_tools import (
+    ToolBudget,
+    compare_candidates,
+    get_game_facts,
+    get_user_game_state,
+)
+from steam_rag.user_workspace.store import DEFAULT_THREAD_TOPICS, WorkspaceStore
 from steam_rag.game_recommendation.profile_builder import collect_recommendation_profile
 from steam_rag.game_recommendation.profile_store import SteamProfileStore
 from steam_rag.game_recommendation.query_parser import (
@@ -52,6 +68,35 @@ class ServicePaths:
     profiles_dir: Path = Path("data/game_profiles")
     service_db: Path = Path("data/steam_service.db")
     time_analysis_dir: Path = Path("data/time_analysis")
+    #: §11 개인화 정보는 게임 사실 데이터와 다른 저장소에 분리한다.
+    workspace_db: Path = Path("data/steam_workspace.db")
+    #: §6.2 게임별 전문가 설정과 지원 범위.
+    expert_dir: Path = Path("data/game_experts")
+
+
+DISCOVERY_WORKSPACE = "discovery"
+PLAY_WORKSPACE = "play"
+
+#: §7 "추가 조사"로 확인할 수 있는 조건. 게임 설명·리뷰 문서에서 답이 나오는 항목만
+#: 넣는다. 가격·할인·출시 상태는 문서 검색으로 확인하지 않는다.
+RESEARCHABLE_CONDITION_GROUPS = frozenset(
+    {
+        "combat",
+        "perspective",
+        "dimension",
+        "playstyle",
+        "genres",
+        "categories",
+        "required_tags",
+        "excluded_conditions",
+    }
+)
+
+#: §4.3 후보 거절 이유가 담긴 표현. 있으면 검색 계획 자체를 바꾼다.
+CANDIDATE_FEEDBACK_PATTERN = re.compile(
+    r"(그림체|아트|비주얼|분위기|전투|스토리|난도|난이도|반복|협동|멀티|가격|예산)"
+    r"[^\n]{0,20}(좋은데|괜찮은데|별로|싫|아쉬|말고|보다|더|이미\s*해)"
+)
 
 
 class SteamServiceRuntime:
@@ -73,6 +118,29 @@ class SteamServiceRuntime:
         self.reranker_model = reranker_model
         self._reranker: Reranker | None = None
         self._reranker_lock = threading.Lock()
+        self._workspace: WorkspaceStore | None = None
+        self._experts: GameExpertRegistry | None = None
+        self._workspace_lock = threading.Lock()
+
+    @property
+    def workspace(self) -> WorkspaceStore:
+        """Lazily open the user-scoped store shared by both spaces (§11)."""
+
+        if self._workspace is None:
+            with self._workspace_lock:
+                if self._workspace is None:
+                    self._workspace = WorkspaceStore(self.paths.workspace_db)
+        return self._workspace
+
+    @property
+    def experts(self) -> GameExpertRegistry:
+        """Load the per-game expert configuration once (§6.2)."""
+
+        if self._experts is None:
+            with self._workspace_lock:
+                if self._experts is None:
+                    self._experts = GameExpertRegistry.load(self.paths.expert_dir)
+        return self._experts
 
     def _get_reranker(self) -> Reranker | None:
         """Return one lazy cross-encoder per service runtime.
@@ -105,15 +173,45 @@ class SteamServiceRuntime:
         history: list[dict[str, str]] | None = None,
         context_games: list[dict[str, Any]] | None = None,
         conversation_state: dict[str, Any] | None = None,
+        workspace: str = DISCOVERY_WORKSPACE,
+        user_id: str = "local",
+        session_id: str = "",
+        game_id: int | None = None,
+        thread_id: str = "",
+        playthrough: int = 1,
     ) -> dict[str, Any]:
+        """Answer one request inside exactly one workspace.
+
+        §4.4 / §11: 탐색 공간과 게임별 플레이 공간은 대화 저장과 컨텍스트 선택을
+        모두 분리한다. 공략 요청은 탐색 대화를 읽지 않고, 탐색 요청은 다른
+        게임의 진행도나 스포일러 설정을 읽지 않는다.
+        """
+
         with telemetry_session() as telemetry:
-            payload = self._ask_impl(
-                question,
-                top_k=top_k,
-                history=history,
-                context_games=context_games,
-                conversation_state=conversation_state,
-            )
+            budget = ToolBudget()
+            if workspace == PLAY_WORKSPACE and game_id:
+                payload = self._play(
+                    question,
+                    user_id=user_id,
+                    appid=int(game_id),
+                    thread_id=thread_id,
+                    playthrough=max(1, int(playthrough)),
+                    top_k=max(1, min(int(top_k), 10)),
+                    budget=budget,
+                )
+            else:
+                payload = self._ask_impl(
+                    question,
+                    top_k=top_k,
+                    history=history,
+                    context_games=context_games,
+                    conversation_state=conversation_state,
+                    user_id=user_id,
+                    session_id=session_id,
+                    budget=budget,
+                )
+            payload["workspace"] = workspace if workspace == PLAY_WORKSPACE and game_id else DISCOVERY_WORKSPACE
+            payload["budget"] = budget.to_dict()
             payload["telemetry"] = telemetry.snapshot()
             return payload
 
@@ -125,11 +223,15 @@ class SteamServiceRuntime:
         history: list[dict[str, str]] | None = None,
         context_games: list[dict[str, Any]] | None = None,
         conversation_state: dict[str, Any] | None = None,
+        user_id: str = "local",
+        session_id: str = "",
+        budget: ToolBudget | None = None,
     ) -> dict[str, Any]:
         question = str(question or "").strip()
         if not question:
             raise ValueError("질문을 입력해 주세요.")
         load_env_file()
+        budget = budget or ToolBudget()
         prior_state = _normalize_conversation_state(conversation_state)
         active_games = _merge_context_games(
             prior_state.get("active_games", []),
@@ -174,8 +276,16 @@ class SteamServiceRuntime:
             prior_state=prior_state,
             target_games=target_games,
         )
+        feedback = self._candidate_feedback(
+            question, active_games, user_id=user_id, session_id=session_id
+        )
+        excluded_appids |= {int(value) for value in feedback.get("excluded_appids", [])}
         if route == "recommendation":
-            recommendation_kwargs: dict[str, Any] = {"excluded_appids": excluded_appids}
+            recommendation_kwargs: dict[str, Any] = {
+                "excluded_appids": excluded_appids,
+                "budget": budget,
+                "feedback": feedback,
+            }
             if prior_state.get("recommendation_query"):
                 recommendation_kwargs["prior_query"] = prior_state["recommendation_query"]
             if prior_state.get("similarity_spec"):
@@ -193,6 +303,7 @@ class SteamServiceRuntime:
         payload["followup_relation"] = followup_relation
         payload["excluded_appids"] = sorted(excluded_appids)
         payload["intent_route"] = route
+        payload["candidate_feedback"] = feedback
         payload["conversation_state"] = _next_conversation_state(
             payload,
             resolved_question=resolved_question,
@@ -214,7 +325,428 @@ class SteamServiceRuntime:
             "chunks": chunks,
             "documents": len(list(self.paths.docs_dir.glob("*.md"))) if self.paths.docs_dir.exists() else 0,
             "workflow": "LangGraph Multi-Agent",
+            "supported_experts": self.experts.summary(),
         }
+
+    # ------------------------------------------------------------------
+    # 게임별 플레이 공간 (§4.4, §8)
+    # ------------------------------------------------------------------
+    def open_play_space(
+        self,
+        user_id: str,
+        *,
+        appid: int,
+        name: str,
+        header_image: str = "",
+        platform: str = "steam",
+    ) -> dict[str, Any]:
+        """Hand off from 탐색 to 플레이 공간 with the game and platform only (§4.4)."""
+
+        handoff = self.workspace.handoff_to_play_space(
+            user_id,
+            appid=appid,
+            name=name,
+            header_image=header_image or _steam_header_image(appid),
+            platform=platform,
+        )
+        expert = self.experts.get(appid)
+        handoff["support"] = expert.support.to_dict() if expert else {}
+        handoff["expert_verified"] = expert is not None
+        handoff["available_topics"] = [
+            {"topic": topic, "title": title} for topic, title in DEFAULT_THREAD_TOPICS
+        ]
+        return handoff
+
+    # ------------------------------------------------------------------
+    # 내 게임 · 내 취향 · 주제별 대화 (§4.5, §11)
+    # ------------------------------------------------------------------
+    def list_library(self, user_id: str) -> list[dict[str, Any]]:
+        return self.workspace.list_library(user_id)
+
+    def add_library_game(
+        self,
+        user_id: str,
+        *,
+        appid: int,
+        name: str,
+        header_image: str = "",
+        note: str = "",
+    ) -> dict[str, Any]:
+        return self.workspace.add_library_game(
+            user_id,
+            appid=appid,
+            name=name,
+            header_image=header_image or _steam_header_image(appid),
+            note=note,
+        )
+
+    def remove_library_game(self, user_id: str, appid: int) -> bool:
+        return self.workspace.remove_library_game(user_id, appid)
+
+    def list_preferences(self, user_id: str) -> list[dict[str, Any]]:
+        return [item.to_dict() for item in self.workspace.list_preferences(user_id)]
+
+    def set_preference(
+        self,
+        user_id: str,
+        *,
+        kind: str,
+        value: str,
+        label: str = "",
+        evidence: str = "",
+        scope: str = "persistent",
+        session_id: str = "",
+    ) -> dict[str, Any] | None:
+        preference = self.workspace.set_preference(
+            user_id,
+            kind=kind,
+            value=value,
+            label=label,
+            evidence=evidence,
+            scope=scope,
+            session_id=session_id,
+        )
+        return preference.to_dict() if preference else None
+
+    def delete_preference(self, user_id: str, preference_id: int) -> bool:
+        return self.workspace.delete_preference(user_id, preference_id)
+
+    def list_play_threads(
+        self, user_id: str, appid: int, *, playthrough: int | None = None
+    ) -> list[dict[str, Any]]:
+        return [
+            thread.to_dict()
+            for thread in self.workspace.list_play_threads(user_id, appid, playthrough=playthrough)
+        ]
+
+    def open_play_thread(
+        self,
+        user_id: str,
+        *,
+        appid: int,
+        topic: str = "general",
+        title: str = "",
+        playthrough: int = 1,
+    ) -> dict[str, Any]:
+        thread = self.workspace.open_play_thread(
+            user_id, appid=appid, topic=topic, title=title, playthrough=playthrough
+        )
+        return thread.to_dict()
+
+    def play_thread_messages(
+        self, user_id: str, thread_id: str, *, limit: int = 20
+    ) -> list[dict[str, Any]]:
+        return self.workspace.recent_play_messages(user_id, thread_id, limit=limit)
+
+    def game_state(self, user_id: str, appid: int, *, playthrough: int = 1) -> dict[str, Any]:
+        return get_user_game_state(self.workspace, user_id, appid, playthrough=playthrough)
+
+    def update_game_state(self, user_id: str, appid: int, **changes: Any) -> dict[str, Any]:
+        playthrough = int(changes.pop("playthrough", 1) or 1)
+        state = self.workspace.update_game_state(
+            user_id, appid, playthrough=playthrough, **changes
+        )
+        return state.to_dict()
+
+    def start_new_playthrough(self, user_id: str, appid: int) -> dict[str, Any]:
+        """Start a new run without overwriting the previous progress (§11)."""
+
+        playthrough = self.workspace.next_playthrough(user_id, appid)
+        state = self.workspace.update_game_state(user_id, appid, playthrough=playthrough, progress="")
+        return state.to_dict()
+
+    def _play(
+        self,
+        question: str,
+        *,
+        user_id: str,
+        appid: int,
+        thread_id: str,
+        playthrough: int,
+        top_k: int,
+        budget: ToolBudget,
+    ) -> dict[str, Any]:
+        """Answer inside one game's play space.
+
+        컨텍스트는 이 게임, 이 회차, 이 주제 대화만 사용한다. 탐색 대화와 다른
+        게임 상태는 이 경로에서 읽지 않는다(§11).
+        """
+
+        load_env_file()
+        store = self.workspace
+        thread = store.get_play_thread(user_id, thread_id) if thread_id else None
+        if thread is None or thread.appid != int(appid):
+            thread = store.open_play_thread(
+                user_id,
+                appid=appid,
+                topic=classify_topic(question),
+                playthrough=playthrough,
+            )
+        playthrough = thread.playthrough
+        context = store.play_context(
+            user_id, appid=appid, thread_id=thread.thread_id, playthrough=playthrough
+        )
+        state = store.get_game_state(user_id, appid, playthrough=playthrough)
+        profile = self.experts.get(appid) or self._adhoc_expert_profile(appid)
+
+        embedder = OpenAIEmbedder(self.embedding_model)
+        generator = OpenAIAnswerGenerator(self.answer_model)
+        manager = OnDemandCorpusManager(
+            client=SteamAPIClient(),
+            catalog_path=self.paths.catalog_path,
+            docs_dir=self.paths.docs_dir,
+            raw_dir=self.paths.raw_dir,
+            profiles_dir=self.paths.profiles_dir,
+            index_path=self.paths.index_path,
+            max_age=timedelta(hours=24),
+        )
+        updates: list[CorpusUpdate] = []
+        try:
+            updates = manager.ensure_questions(
+                [f"{profile.name} appid: {appid}"], embedder, strict=False, max_games=1
+            )
+        except Exception:
+            updates = []
+        if not self.paths.index_path.exists():
+            raise FileNotFoundError(
+                "검색할 벡터 인덱스가 없습니다. 이 게임의 문서를 먼저 수집해 주세요."
+            )
+        pipeline = RAGPipeline.from_path(
+            self.paths.index_path,
+            embedder,
+            generator,
+            reranker=self._get_reranker(),
+            rerank_candidates=20,
+        )
+        indexed = {
+            int(document.metadata["appid"])
+            for document in pipeline.index.documents
+            if str(document.metadata.get("appid") or "").isdigit()
+        }
+        if int(appid) not in indexed:
+            raise LookupError(
+                f"'{profile.name}'의 문서를 아직 수집하지 못해 공략 답변을 만들 수 없습니다. "
+                "게임의 정식명 또는 Steam AppID를 확인한 뒤 다시 시도해 주세요."
+            )
+
+        budget.take_expert_call(f"appid:{appid}")
+        agent = GameExpertAgent(
+            profile,
+            pipeline.retriever,
+            embedder,
+            generator,
+            reranker=self._get_reranker(),
+        )
+        result = agent.answer(
+            question,
+            state=state,
+            attempts=context["attempts"],
+            thread_messages=context["messages"],
+            k=top_k,
+        )
+
+        store.append_play_message(
+            user_id, thread.thread_id, appid=appid, role="user", content=question
+        )
+        store.append_play_message(
+            user_id,
+            thread.thread_id,
+            appid=appid,
+            role="assistant",
+            content=result.answer,
+            payload={"scope": result.scope.to_dict(), "spoiler": result.spoiler},
+        )
+        if result.is_retry:
+            store.record_attempt(
+                user_id,
+                appid,
+                action=question,
+                outcome="사용자가 효과 없었다고 보고",
+                playthrough=playthrough,
+                thread_id=thread.thread_id,
+            )
+
+        sources = [_source_payload(item) for item in result.evidence]
+        evidence_contexts = [_evidence_payload(item) for item in result.evidence]
+        return {
+            "mode": "play",
+            "answer": result.answer,
+            "query_variants": [],
+            "agents": [
+                {
+                    "agent": "Play Space Router",
+                    "status": "completed",
+                    "detail": (
+                        f"appid={appid}, thread={thread.topic}, playthrough={playthrough}, "
+                        f"documents={_updates_detail(updates)}"
+                    ),
+                },
+                *result.trace,
+            ],
+            "games": [
+                {
+                    "appid": int(appid),
+                    "name": profile.name,
+                    "image": _steam_header_image(appid),
+                    "url": f"https://store.steampowered.com/app/{int(appid)}/?l=koreana&cc=kr",
+                    "status": "게임별 플레이 공간",
+                }
+            ],
+            "sources": sources,
+            "evidence_contexts": evidence_contexts,
+            "claim_citations": [],
+            "evidence_coverage": {},
+            "expert": result.to_dict(),
+            "thread": thread.to_dict(),
+            "game_state": state.to_dict(),
+            "conversation_state": {
+                "active_games": [{"appid": int(appid), "name": profile.name}],
+                "last_mode": "play",
+                "last_resolved_question": question[:1600],
+                "recommendation_query": {},
+                "similarity_spec": {},
+            },
+        }
+
+    def _adhoc_expert_profile(self, appid: int) -> GameExpertProfile:
+        """Answer outside the verified 3 games without promising the same level (§9.1)."""
+
+        name = f"Steam App {int(appid)}"
+        try:
+            facts = get_game_facts(SteamProfileStore(self.paths.service_db), appid)
+            if facts.get("found") and facts.get("name"):
+                name = str(facts["name"])
+        except Exception:
+            pass
+        return GameExpertProfile(
+            appid=int(appid),
+            game_key=f"app_{int(appid)}",
+            name=name,
+            platforms=("steam",),
+            support=SupportScope(
+                out_of_scope_note="검증된 지원 범위가 지정되지 않은 게임입니다.",
+            ),
+        )
+
+    # ------------------------------------------------------------------
+    # 비교 (§4.3, §4.5)
+    # ------------------------------------------------------------------
+    def compare(self, appids: list[int]) -> dict[str, Any]:
+        """Compare selected candidates on the same experience axes."""
+
+        store = SteamProfileStore(self.paths.service_db)
+        store.import_profile_directory(self.paths.profiles_dir)
+        table, missing = compare_candidates(store, appids)
+        return {
+            "mode": "comparison",
+            "comparison": table.to_dict(),
+            "answer": comparison_markdown(table),
+            "missing_appids": missing,
+            "agents": [
+                {
+                    "agent": "Comparison Service",
+                    "status": "completed" if len(table.games) >= 2 else "insufficient_games",
+                    "detail": (
+                        f"games={len(table.games)}, differing_axes={len(table.differing_axes)}, "
+                        f"missing_profiles={len(missing)}"
+                    ),
+                }
+            ],
+        }
+
+    def _candidate_feedback(
+        self,
+        question: str,
+        active_games: list[dict[str, Any]],
+        *,
+        user_id: str,
+        session_id: str,
+    ) -> dict[str, Any]:
+        """Turn a rejection reason into a new search plan (§4.3).
+
+        필수 조건은 사용자의 말 없이 완화하지 않는다. 이 함수는 제외 후보와
+        선호 가중치, 그리고 사용자가 이번 문장에서 새로 말한 조건만 만든다.
+        """
+
+        if not active_games or not CANDIDATE_FEEDBACK_PATTERN.search(question):
+            return {}
+        try:
+            parsed = OpenAIAnswerGenerator(self.answer_model).interpret_candidate_feedback(
+                question, active_games
+            )
+        except Exception:
+            parsed = {}
+        if not isinstance(parsed, dict) or not parsed:
+            return {}
+        known = {int(game["appid"]) for game in active_games}
+        rejected = [
+            {
+                "appid": int(row.get("appid")),
+                "aspect": str(row.get("aspect") or ""),
+                "reason": str(row.get("reason") or "")[:200],
+            }
+            for row in parsed.get("rejected") or []
+            if isinstance(row, dict) and _int_or_none(row.get("appid")) in known
+        ]
+        liked = [
+            {"appid": int(row.get("appid")), "aspect": str(row.get("aspect") or "")}
+            for row in parsed.get("liked") or []
+            if isinstance(row, dict) and _int_or_none(row.get("appid")) in known
+        ]
+        played = {
+            int(value)
+            for value in parsed.get("already_played") or []
+            if _int_or_none(value) in known
+        }
+        feedback = {
+            "excluded_appids": sorted({row["appid"] for row in rejected} | played),
+            "rejected": rejected,
+            "liked": liked,
+            "preferred_aspects": [
+                str(value) for value in parsed.get("preferred_aspects") or [] if str(value).strip()
+            ][:6],
+            "new_must": [str(value) for value in parsed.get("new_must") or [] if str(value).strip()][:6],
+            "new_exclude": [
+                str(value) for value in parsed.get("new_exclude") or [] if str(value).strip()
+            ][:6],
+            "needs_new_candidates": bool(parsed.get("needs_new_candidates", True)),
+        }
+        self._remember_feedback(user_id, session_id, feedback, question)
+        return feedback
+
+    def _remember_feedback(
+        self,
+        user_id: str,
+        session_id: str,
+        feedback: dict[str, Any],
+        question: str,
+    ) -> None:
+        """Record this turn's stated conditions as session memory, not permanent taste (§11)."""
+
+        if not session_id:
+            return
+        store = self.workspace
+        evidence = question.strip()[:200]
+        for value in feedback.get("new_exclude", []):
+            store.set_preference(
+                user_id,
+                kind="dislike",
+                value=value,
+                label=value,
+                evidence=evidence,
+                scope="session",
+                session_id=session_id,
+            )
+        for value in [*feedback.get("new_must", []), *feedback.get("preferred_aspects", [])]:
+            store.set_preference(
+                user_id,
+                kind="like",
+                value=value,
+                label=value,
+                evidence=evidence,
+                scope="session",
+                session_id=session_id,
+            )
 
     def _research(
         self,
@@ -357,7 +889,11 @@ class SteamServiceRuntime:
         excluded_appids: set[int] | None = None,
         prior_query: dict[str, Any] | None = None,
         prior_similarity_spec: dict[str, Any] | None = None,
+        budget: ToolBudget | None = None,
+        feedback: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        budget = budget or ToolBudget()
+        feedback = feedback or {}
         generator = OpenAIAnswerGenerator(self.answer_model)
         client = SteamAPIClient()
         current_query = OpenAIRecommendationQueryStructurer(self.answer_model).structure(question)
@@ -510,6 +1046,9 @@ class SteamServiceRuntime:
             discovery_order = {appid: rank for rank, appid in enumerate(verified)}
             ranked_candidates.sort(key=lambda item: discovery_order.get(item.appid, len(discovery_order)))
         selected_candidates = ranked_candidates[:5]
+        verification = self._investigate_unverified_conditions(
+            selected_candidates, budget=budget
+        )
         candidates = [
             _candidate_payload(
                 item,
@@ -564,10 +1103,33 @@ class SteamServiceRuntime:
             {
                 "agent": "Recommendation Research Agent",
                 "status": "completed",
-                "detail": f"ranked={len(run.selection.candidates)}, profiles={run.selection.scanned_profiles}",
+                "detail": (
+                    f"ranked={len(run.selection.candidates)}, "
+                    f"verified={len(run.selection.verified_candidates)}, "
+                    f"unverified={len(run.selection.unverified_candidates)}, "
+                    f"profiles={run.selection.scanned_profiles}"
+                ),
+            },
+            {
+                "agent": "Condition Verification Agent",
+                "status": verification["status"],
+                "detail": verification["detail"],
             },
             {"agent": "Answer Agent", "status": "completed", "detail": f"games={len(candidates)}"},
         ]
+        if feedback.get("rejected"):
+            agents.insert(
+                1,
+                {
+                    "agent": "Candidate Feedback Agent",
+                    "status": "completed",
+                    "detail": (
+                        f"rejected={len(feedback['rejected'])}, "
+                        f"preferred={','.join(feedback.get('preferred_aspects', [])) or '없음'}, "
+                        f"new_candidates={feedback.get('needs_new_candidates', True)}"
+                    ),
+                },
+            )
         return {
             "mode": "recommendation",
             "answer": answer,
@@ -601,7 +1163,92 @@ class SteamServiceRuntime:
                 "excluded_appids": sorted(excluded_appids),
                 "effective_query": query.model_dump(),
                 "hard_constraint_gate": hard_gate,
+                "condition_verification": verification,
+                "candidate_feedback": feedback,
             },
+        }
+
+    def _investigate_unverified_conditions(
+        self,
+        candidates: list[Any],
+        *,
+        budget: ToolBudget,
+    ) -> dict[str, Any]:
+        """§7 '추가 조사': 태그만으로 부족한 조건을 게임 문서에서 다시 확인한다.
+
+        한 요청의 추가 검색과 전문가 호출은 :class:`ToolBudget` 상한을 지킨다.
+        상한에 도달하면 확인한 결과와 남은 미확인 항목을 그대로 반환한다.
+        """
+
+        # 가격·할인·출시 상태는 문서 검색으로 확인할 수 없다. 게임 설명에서 답이
+        # 나올 수 있는 조건이 있을 때만 인덱스를 연다.
+        pending = [
+            item
+            for item in candidates
+            if item.constraints is not None
+            and any(
+                verdict.group in RESEARCHABLE_CONDITION_GROUPS
+                for verdict in item.constraints.must_unverified
+            )
+        ]
+        if not pending:
+            return {"status": "not_required", "detail": "문서로 확인할 미확인 조건 없음", "resolved": []}
+        if not self.paths.index_path.exists():
+            return {
+                "status": "no_corpus",
+                "detail": f"추가 조사 대상 {len(pending)}개, 검색 인덱스 없음",
+                "resolved": [],
+            }
+        try:
+            embedder = OpenAIEmbedder(self.embedding_model)
+            pipeline = RAGPipeline.from_path(self.paths.index_path, embedder)
+        except Exception as exc:
+            return {
+                "status": "unavailable",
+                "detail": f"{type(exc).__name__}: {exc}",
+                "resolved": [],
+            }
+        indexed = {
+            int(document.metadata["appid"])
+            for document in pipeline.index.documents
+            if str(document.metadata.get("appid") or "").isdigit()
+        }
+        resolved: list[dict[str, Any]] = []
+        checked = 0
+        for candidate in pending:
+            if candidate.appid not in indexed:
+                continue
+            if not budget.take_expert_call(f"verify:{candidate.appid}"):
+                break
+            checked += 1
+            labels = [verdict.label for verdict in candidate.constraints.must_unverified]
+            try:
+                results = pipeline.search(
+                    f"{candidate.name} {' '.join(labels)}", k=4
+                )
+            except Exception:
+                continue
+            supporting = [
+                _source_payload(result)
+                for result in results
+                if int(result.document.metadata.get("appid") or 0) == candidate.appid
+            ]
+            resolved.append(
+                {
+                    "appid": candidate.appid,
+                    "name": candidate.name,
+                    "unverified": labels,
+                    "evidence_found": len(supporting),
+                    "sources": supporting[:2],
+                }
+            )
+        return {
+            "status": "completed" if resolved else ("budget_exhausted" if checked else "no_corpus"),
+            "detail": (
+                f"대상 {len(pending)}개, 추가 조사 {checked}개, "
+                f"근거 확보 {sum(1 for item in resolved if item['evidence_found'])}개"
+            ),
+            "resolved": resolved,
         }
 
     def _resolve_similarity_reference(
@@ -690,6 +1337,13 @@ class SteamServiceRuntime:
                 "reason": str(item.get("reason") or "").strip(),
             }
         return verified
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _context_appids(context_games: list[dict[str, Any]]) -> set[int]:
@@ -1353,12 +2007,20 @@ def _candidate_payload(candidate: Any, *, discovery_info: dict[str, Any] | None 
     review = profile.get("recent_review_summary") or {}
     price = profile.get("price") or {}
     final_price = price.get("final")
+    constraints = getattr(candidate, "constraints", None)
     return {
         "appid": candidate.appid,
         "name": candidate.name,
         "score": round(float(candidate.score), 2),
         "matched_tags": list(candidate.matched_tags)[:5],
         "matched_facets": list(candidate.matched_facets)[:5],
+        # §4.2 후보 카드: 잘 맞는 점 / 선택 전 확인 / 정보 상태
+        "condition_status": constraints.status if constraints is not None else "satisfied",
+        "fit_reasons": constraints.fit_reasons[:5] if constraints is not None else [],
+        "checks_before_choosing": (
+            constraints.checks_before_choosing[:5] if constraints is not None else []
+        ),
+        "information_status": constraints.information_status if constraints is not None else {},
         "positive_ratio": review.get("positive_ratio"),
         "sample_size": review.get("sample_size"),
         "is_free": price.get("is_free") is True,
@@ -1405,6 +2067,14 @@ def _recommendation_markdown(
             f"Steam에서 모든 조건을 다시 확인한 후보는 요청한 {requested_count}개 중 "
             f"{len(candidates)}개입니다. 맞지 않는 게임으로 수를 채우지 않았습니다."
         )
+    unverified_names = [
+        item["name"] for item in candidates if item.get("condition_status") == UNVERIFIED
+    ]
+    if unverified_names and len(unverified_names) == len(candidates):
+        lines.append(
+            "모든 필수 조건을 확인한 게임은 아직 없습니다. 아래 후보는 일부 조건이 미확인 상태이며, "
+            "미확인 항목을 추가로 조사하거나 조건을 조정해 다시 찾을 수 있습니다."
+        )
     for rank, item in enumerate(candidates, start=1):
         reason = _recommendation_reason(item)
         ratio = item.get("positive_ratio")
@@ -1417,6 +2087,9 @@ def _recommendation_markdown(
         )
         release = f" · 출시일 {item['release_date']}" if getattr(query, "upcoming_required", False) and item.get("release_date") else ""
         lines.append(f"{rank}. **{item['name']}** — {reason}{rating}{sale}{release}")
+        checks = item.get("checks_before_choosing") or []
+        if checks:
+            lines.append(f"   - 선택 전 확인: {', '.join(checks[:3])}")
     lines.append("")
     if discovery.get("source_urls"):
         lines.append(

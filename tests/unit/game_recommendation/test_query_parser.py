@@ -74,6 +74,37 @@ class RecommendationTests(unittest.TestCase):
         self.assertTrue(query.recent_rating_required)
         self.assertEqual(query.price_max_krw, 40_000)
 
+    def test_explicitly_rejected_condition_becomes_an_exclusion(self) -> None:
+        """기획안 4.1: '턴제보다는 액션'을 턴제 요구로 읽지 않는다."""
+
+        query = parse_recommendation_query(
+            "그림체가 예쁘고 스토리가 있는 게임을 찾고 있어. 턴제보다는 직접 움직이고 공격하는 액션이 좋아."
+        )
+
+        self.assertNotIn("turn_based", query.combat)
+        self.assertIn("turn_based_combat", query.excluded_conditions)
+        self.assertEqual(query.combat, ["direct_control"])
+
+    def test_action_alone_does_not_confirm_real_time_combat(self) -> None:
+        query = parse_recommendation_query("액션 게임 추천해줘")
+
+        self.assertNotIn("real_time", query.combat)
+
+    def test_negation_forms_are_recognized(self) -> None:
+        for question, excluded in (
+            ("턴제 전투 말고 실시간 액션 RPG 추천", "turn_based_combat"),
+            ("협동은 싫어. 혼자 하는 스토리 게임 추천", "co_op"),
+            ("로그라이크는 별로야. 스토리 게임 추천", "roguelike"),
+        ):
+            with self.subTest(question=question):
+                self.assertIn(excluded, parse_recommendation_query(question).excluded_conditions)
+
+    def test_positive_turn_based_request_is_still_a_requirement(self) -> None:
+        query = parse_recommendation_query("턴제 RPG 추천해줘")
+
+        self.assertIn("turn_based", query.combat)
+        self.assertEqual(query.excluded_conditions, [])
+
     def test_rule_parser_preserves_sale_and_upcoming_requirements(self) -> None:
         sale = parse_recommendation_query("현재 세일 중인 스토리 RPG 5개 추천")
         upcoming = parse_recommendation_query("앞으로 나올 신작 RPG 기대작 5개")

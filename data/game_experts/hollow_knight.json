@@ -1,0 +1,95 @@
+{
+  "appid": 367520,
+  "game_key": "hollow_knight",
+  "name": "Hollow Knight",
+  "aliases": ["할로우 나이트", "할나", "Hollow Knight"],
+  "platforms": ["steam"],
+  "editions": ["Hollow Knight", "Hollow Knight: Voidheart Edition"],
+  "question_type": "조작 중심 액션",
+  "tools": ["search_game_knowledge", "get_game_facts", "get_user_game_state"],
+  "key_systems": [
+    {
+      "system_id": "charms",
+      "name": "부적(Charm) 장착",
+      "summary": "노치 한도 안에서 부적을 조합해 전투와 이동 능력을 바꾼다. 벤치에서만 교체할 수 있다.",
+      "source": "steam_store_and_in_game_ui",
+      "verified_at": ""
+    },
+    {
+      "system_id": "soul",
+      "name": "소울과 회복",
+      "summary": "적을 때려 모은 소울로 회복하거나 주문을 쓴다. 회복 중에는 이동이 멈춘다.",
+      "source": "steam_store_and_in_game_ui",
+      "verified_at": ""
+    },
+    {
+      "system_id": "geo_loss",
+      "name": "사망과 그림자 회수",
+      "summary": "사망하면 소지 지오를 그 자리에 남기고, 남은 그림자를 처치해야 회수한다.",
+      "source": "steam_store_and_in_game_ui",
+      "verified_at": ""
+    },
+    {
+      "system_id": "movement",
+      "name": "이동 능력 해금",
+      "summary": "대시, 벽 타기, 이단 점프 같은 이동 능력을 얻으면 이전 지역의 새 경로가 열린다.",
+      "source": "steam_store_and_in_game_ui",
+      "verified_at": ""
+    }
+  ],
+  "milestones": [
+    {
+      "order": 1,
+      "milestone_id": "crossroads",
+      "label": "잊혀진 교차로",
+      "keywords": ["교차로", "crossroads", "초반", "시작", "튜토리얼", "더트마우스", "dirtmouth"],
+      "story_sensitive": false
+    },
+    {
+      "order": 2,
+      "milestone_id": "greenpath",
+      "label": "그린패스와 곰팡이 황무지",
+      "keywords": ["그린패스", "greenpath", "황무지", "fungal"],
+      "story_sensitive": false
+    },
+    {
+      "order": 3,
+      "milestone_id": "city_of_tears",
+      "label": "눈물의 도시",
+      "keywords": ["눈물의 도시", "city of tears", "수로", "waterways"],
+      "story_sensitive": true
+    },
+    {
+      "order": 4,
+      "milestone_id": "late_areas",
+      "label": "후반 지역",
+      "keywords": ["심연", "abyss", "백색 궁전", "white palace", "후반"],
+      "story_sensitive": true
+    },
+    {
+      "order": 5,
+      "milestone_id": "ending",
+      "label": "결말",
+      "keywords": ["결말", "엔딩", "ending", "진엔딩", "최종 보스"],
+      "story_sensitive": true
+    }
+  ],
+  "knowledge_sources": [
+    {
+      "title": "Steam 상품 페이지와 공식 설명",
+      "url": "https://store.steampowered.com/app/367520/",
+      "usage": "steam_official",
+      "version": "",
+      "collected_at": "",
+      "spoiler_labeled": true
+    }
+  ],
+  "support": {
+    "topics": ["system", "early_guide", "boss"],
+    "sections": ["잊혀진 교차로", "그린패스와 곰팡이 황무지"],
+    "verified_version": "",
+    "verified_platforms": ["steam"],
+    "last_reviewed": "",
+    "out_of_scope_note": "지원 범위와 버전은 개발자가 직접 검증한 뒤 채운다. 값이 비어 있으면 답변에서 '버전 미확인'으로 표시한다."
+  }
+}

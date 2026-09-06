@@ -293,6 +293,133 @@ class OpenAIAnswerGenerator:
             return _fallback_service_answer(results)
         return _truncate_service_answer(content, max_chars=1400)
 
+    def generate_expert_answer(
+        self,
+        question: str,
+        results: Sequence[SearchResult],
+        context: dict[str, Any],
+    ) -> str:
+        """Answer one 공략 question inside a single game's play space (§8).
+
+        게임별 전문가의 답변 Agent다. 검색·스포일러 필터·지원 범위 판정은 이미
+        결정론적으로 끝난 상태로 들어오며, 이 메서드는 그 결과를 바꾸지 않는다.
+        API 오류나 빈 응답은 호출자가 결정론적 답변으로 대체한다.
+        """
+
+        state = context.get("game_state") or {}
+        attempts = [
+            f"- 시도: {str(item.get('action') or '')[:160]} / 결과: {str(item.get('outcome') or '미기록')[:80]}"
+            for item in context.get("attempts") or []
+        ]
+        systems = [
+            f"- {str(item.get('name') or '')}: {str(item.get('summary') or '')[:200]}"
+            for item in context.get("key_systems") or []
+        ]
+        context_blocks = [
+            f"[근거 {index}] 구분={result.document.metadata.get('section')}; "
+            f"제목={result.document.metadata.get('item_title')}; "
+            f"날짜={result.document.metadata.get('source_date')}; "
+            f"출처유형={result.document.metadata.get('source_type') or 'steam_corpus'}\n"
+            f"{result.document.page_content[:1500]}"
+            for index, result in enumerate(results, start=1)
+        ]
+        retry_instruction = (
+            "사용자가 이전 조언이 통하지 않았다고 말했다. 같은 조언을 반복하지 말고 "
+            f"{', '.join(context.get('retry_assumptions') or [])} 중 어떤 가정을 다시 볼지 "
+            "먼저 밝힌 뒤 새 행동을 제안한다."
+            if context.get("is_retry")
+            else ""
+        )
+        scope_instruction = (
+            ""
+            if context.get("in_support_scope")
+            else (
+                "이 주제는 검증된 지원 범위 밖이다. 첫 문장에서 그 사실을 알리고, "
+                "확인된 자료로 말할 수 있는 수준까지만 답한다."
+            )
+        )
+        response = self._chat_completion(
+            model=self.model_name,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        f"'{context.get('game')}' 한 게임만 담당하는 공략 전문가 Agent다. "
+                        "제공된 근거와 사용자 상태만 사용하고 다른 게임의 정보를 섞지 않는다. "
+                        "답변은 반드시 다음 순서를 지킨다: "
+                        "1) 현재 상황 진단, 2) 바로 시도할 행동, 3) 필요한 이유, 4) 추가 힌트. "
+                        "확인된 게임 시스템과 그로부터 제안하는 전술을 문장에서 구분한다. "
+                        "확인할 수 없는 수치나 피해량을 만들어 '최적 빌드'라고 단정하지 않는다. "
+                        "스토리 관련 내용은 힌트부터 제시하고 사용자가 요청한 범위를 넘지 않는다. "
+                        "제공된 스포일러 안내를 어기는 이름·지명·전개를 쓰지 않는다. "
+                        "한국어 900자 이내, 각 주장 뒤에 [근거 N]을 붙인다. "
+                        f"{scope_instruction} {retry_instruction}"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"질문: {question}\n"
+                        f"주제: {context.get('topic')}\n"
+                        f"적용 버전: {context.get('verified_version') or '미확인'}\n"
+                        f"스포일러 안내: {context.get('spoiler_notice')}\n"
+                        f"진행 구간: {state.get('progress') or '미확인'}\n"
+                        f"빌드: {state.get('character_build') or '미확인'}\n"
+                        f"장비: {', '.join(state.get('equipment') or []) or '미확인'}\n"
+                        f"확인된 핵심 시스템:\n{chr(10).join(systems) or '- 없음'}\n"
+                        f"이전 시도 기록:\n{chr(10).join(attempts) or '- 없음'}\n\n"
+                        "검색 근거:\n" + "\n\n".join(context_blocks)
+                    ),
+                },
+            ],
+        )
+        content = ""
+        if getattr(response, "choices", None):
+            content = str(response.choices[0].message.content or "").strip()
+        return _truncate_service_answer(content, max_chars=1400) if content else ""
+
+    def interpret_candidate_feedback(
+        self,
+        message: str,
+        candidates: Sequence[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Turn "A의 그림체는 좋은데 전투는 B가 좋아" into a new search plan (§4.3).
+
+        필수 조건은 여기서 완화하지 않는다. 거절 이유와 선호 가중치만 조정한다.
+        """
+
+        listed = "\n".join(
+            f"- {str(item.get('name') or '')} (appid: {item.get('appid')})" for item in candidates
+        ) or "- 없음"
+        try:
+            response = self._chat_completion(
+                model=self.model_name,
+                response_format={"type": "json_object"},
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Steam 게임 탐색 대화에서 사용자의 후보 반응을 검색 계획으로 바꾸는 Agent다. "
+                            "JSON만 반환한다. 스키마: {\"rejected\": [{\"appid\": int, \"aspect\": str, "
+                            "\"reason\": str}], \"liked\": [{\"appid\": int, \"aspect\": str}], "
+                            "\"new_must\": [str], \"new_exclude\": [str], \"preferred_aspects\": [str], "
+                            "\"already_played\": [int], \"needs_new_candidates\": bool}. "
+                            "aspect는 art_style, combat, story, difficulty, repetition, co_op, price 중 하나다. "
+                            "new_must와 new_exclude는 사용자가 이번 문장에서 명시한 조건만 넣는다. "
+                            "추측한 조건을 넣지 않는다. 목록에 없는 appid를 만들지 않는다."
+                        ),
+                    },
+                    {"role": "user", "content": f"후보 목록:\n{listed}\n\n사용자 반응:\n{message}"},
+                ],
+            )
+            content = ""
+            if getattr(response, "choices", None):
+                content = str(response.choices[0].message.content or "").strip()
+            parsed = json.loads(content or "{}")
+        except Exception:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
     def generate_hyde(self, question: str, search_query: str, reason: str) -> str:
         messages = [
             {
