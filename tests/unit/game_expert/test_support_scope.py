@@ -7,9 +7,11 @@ from pathlib import Path
 
 import _bootstrap  # noqa: F401
 from steam_rag.game_expert.support_scope import (
+    SUPPORT_TOPICS,
     GameExpertRegistry,
     build_expert_profile,
     classify_topic,
+    with_topic_particle,
 )
 
 
@@ -71,6 +73,23 @@ class SupportScopeTests(unittest.TestCase):
         self.assertFalse(unsupported.supported)
         self.assertIn("검증한 지원 범위가 아닙니다", unsupported.reason)
         self.assertIn("핵심 시스템 설명", unsupported.reason)
+
+    def test_scope_sentences_use_the_correct_korean_particle(self) -> None:
+        """받침이 있는 주제 이름에 '는'을 붙이면 문장이 어색해진다."""
+
+        self.assertEqual(with_topic_particle("업데이트 영향"), "업데이트 영향은")
+        self.assertEqual(with_topic_particle("핵심 시스템 설명"), "핵심 시스템 설명은")
+        self.assertEqual(with_topic_particle("초반 진행 가이드"), "초반 진행 가이드는")
+        self.assertEqual(with_topic_particle("장비와 빌드"), "장비와 빌드는")
+
+        profile = build_expert_profile(payload())
+        self.assertTrue(profile.decide_scope("update").reason.startswith("업데이트 영향은"))
+        self.assertTrue(profile.decide_scope("boss").reason.startswith("대표 난관 공략은"))
+
+    def test_every_shipped_topic_label_gets_a_particle(self) -> None:
+        for label in SUPPORT_TOPICS.values():
+            with self.subTest(label=label):
+                self.assertTrue(with_topic_particle(label).endswith(("은", "는")))
 
     def test_invalid_payloads_are_skipped(self) -> None:
         self.assertIsNone(build_expert_profile({"name": "No AppID"}))

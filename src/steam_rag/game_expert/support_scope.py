@@ -32,6 +32,24 @@ SUPPORT_TOPICS = {
 }
 
 
+def has_final_consonant(word: str) -> bool:
+    """True when the last Korean syllable ends with a 받침."""
+
+    for char in reversed(word.strip()):
+        if "가" <= char <= "힣":
+            return (ord(char) - 0xAC00) % 28 != 0
+        if char.isalnum():
+            # 숫자와 라틴 문자는 읽는 방식이 갈리므로 받침 없음으로 둔다.
+            return False
+    return False
+
+
+def with_topic_particle(word: str) -> str:
+    """Attach 은/는 so generated Korean sentences read correctly."""
+
+    return f"{word}{'은' if has_final_consonant(word) else '는'}"
+
+
 @dataclass(frozen=True, slots=True)
 class KeySystem:
     """One mechanic the expert can explain, with the source that confirmed it."""
@@ -178,11 +196,12 @@ class GameExpertProfile:
         return max(matched, key=lambda item: item.order) if matched else None
 
     def decide_scope(self, topic: str) -> ScopeDecision:
+        label = SUPPORT_TOPICS.get(topic, topic)
         if self.support.covers_topic(topic):
             return ScopeDecision(
                 supported=True,
                 topic=topic,
-                reason=f"{SUPPORT_TOPICS.get(topic, topic)}는 검증된 지원 범위입니다.",
+                reason=f"{with_topic_particle(label)} 검증된 지원 범위입니다.",
                 verified_version=self.support.verified_version,
                 last_reviewed=self.support.last_reviewed,
             )
@@ -191,7 +210,7 @@ class GameExpertProfile:
             supported=False,
             topic=topic,
             reason=(
-                f"{SUPPORT_TOPICS.get(topic, topic)}는 아직 검증한 지원 범위가 아닙니다. "
+                f"{with_topic_particle(label)} 아직 검증한 지원 범위가 아닙니다. "
                 f"검증된 범위는 {covered or '없음'}입니다."
             ),
             verified_version=self.support.verified_version,
